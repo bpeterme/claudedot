@@ -122,13 +122,16 @@ _cdot_register() {
 
 # Finds symlinks in the claude config dir, adds them to the per-machine local
 # exclude (never committed), untracks them from the git index if needed, and
-# warns about broken ones (dangling symlinks typically pulled from another machine).
+# warns about broken ones. Distinguishes stale local symlinks (target under
+# $HOME — leftover from a prior installation) from ones likely pulled from
+# another machine (target is an absolute path to a different machine's home).
 _cdot_exclude_symlinks() {
   local dir="$CDOT_CLAUDE_DIR"
   [[ -d "$dir/.git" ]] || return 0
 
   local exclude_file="$dir/.git/info/exclude"
-  local broken=()
+  local broken_local=()
+  local broken_remote=()
 
   while IFS= read -r -d '' symlink; do
     local rel="${symlink#"$dir/"}"
@@ -142,16 +145,65 @@ _cdot_exclude_symlinks() {
     # the symlink from the remote and other machines
     git -C "$dir" rm --cached --ignore-unmatch "$rel" >/dev/null 2>&1
 
-    # Collect broken (dangling) symlinks — target doesn't exist on this machine
-    [[ ! -e "$symlink" ]] && broken+=("$rel → $(readlink "$symlink")")
+    if [[ ! -e "$symlink" ]]; then
+      local target
+      target=$(readlink "$symlink")
+      # If the target is under $HOME or a typical local home prefix, it's a
+      # stale local symlink (e.g. a debug pointer left by a previous install),
+      # not something pulled from another machine.
+      if [[ "$target" == "$HOME"* || "$target" == /Users/* || "$target" == /home/* ]]; then
+        broken_local+=("$rel → $target")
+      else
+        broken_remote+=("$rel → $target")
+      fi
+    fi
   done < <(find "$dir" \( -path "$dir/.git" -prune \) -o \( -type l -print0 \))
 
-  if [[ ${#broken[@]} -gt 0 ]]; then
+  if [[ ${#broken_local[@]} -gt 0 ]]; then
+    echo "⚠  Stale local symlink(s) found — target no longer exists:"
+    for b in "${broken_local[@]}"; do
+      echo "   $b"
+    done
+    echo "   Excluded from sync."
+  fi
+
+  if [[ ${#broken_remote[@]} -gt 0 ]]; then
     echo "⚠  Broken symlink(s) in Claude config — likely pulled from another machine:"
-    for b in "${broken[@]}"; do
+    for b in "${broken_remote[@]}"; do
       echo "   $b (target missing)"
     done
     echo "   Removed from sync. Restore your own symlinks manually."
+  fi
+}
+
+# Finds embedded git repos staged as gitlinks (mode 160000), removes them from
+# the index, and adds them to info/exclude so they stay out of future commits.
+# Embedded repos staged this way would create a submodule reference without a
+# .gitmodules entry, which breaks clones on other machines.
+_cdot_exclude_gitlinks() {
+  local dir="$CDOT_CLAUDE_DIR"
+  [[ -d "$dir/.git" ]] || return 0
+
+  local exclude_file="$dir/.git/info/exclude"
+  local found=()
+
+  while IFS=$'\t' read -r _ path; do
+    [[ -z "$path" ]] && continue
+
+    if ! grep -qxF "$path" "$exclude_file" 2>/dev/null; then
+      echo "$path" >> "$exclude_file"
+    fi
+
+    git -C "$dir" rm --cached --ignore-unmatch "$path" >/dev/null 2>&1
+    found+=("$path")
+  done < <(git -C "$dir" ls-files --stage 2>/dev/null | grep "^160000")
+
+  if [[ ${#found[@]} -gt 0 ]]; then
+    echo "⚠  Embedded git repo(s) found — excluded from sync:"
+    for p in "${found[@]}"; do
+      echo "   $p"
+    done
+    echo "   Use 'git submodule add' if you intended to track one."
   fi
 }
 
@@ -186,9 +238,10 @@ _cdot_push() {
   git -C "$dir" remote get-url origin >/dev/null 2>&1 || return 0
 
   git -C "$dir" add -A
-  # Un-stage any symlinks — .gitignore allowlist overrides info/exclude so we
-  # must remove them from the index after staging, not before
+  # Un-stage symlinks and embedded git repos — .gitignore allowlist overrides
+  # info/exclude so we must remove them from the index after staging, not before
   _cdot_exclude_symlinks
+  _cdot_exclude_gitlinks
 
   # Nothing new to commit
   git -C "$dir" diff --cached --quiet && return 0
@@ -263,7 +316,6 @@ _cdot_init() {
   fi
 
   _cdot_write_gitignore "$dir"
-  _cdot_exclude_symlinks
 
   if git -C "$dir" remote get-url origin >/dev/null 2>&1; then
     local old_remote
@@ -285,6 +337,7 @@ _cdot_init() {
     # Remote has history — commit any local state, then rebase on top of remote
     git -C "$dir" add -A
     _cdot_exclude_symlinks
+    _cdot_exclude_gitlinks
     if [[ -n "$(git -C "$dir" status --porcelain 2>/dev/null)" ]]; then
       git -C "$dir" commit -m "local state before initial sync — $(_cdot_machine_id)"
     fi
@@ -324,6 +377,7 @@ _cdot_init() {
     # Remote is empty — push local state
     git -C "$dir" add -A
     _cdot_exclude_symlinks
+    _cdot_exclude_gitlinks
     if ! git -C "$dir" diff --cached --quiet 2>/dev/null \
         || ! git -C "$dir" log -1 >/dev/null 2>&1; then
       git -C "$dir" commit --allow-empty -m "initial sync — $(_cdot_machine_id)"
