@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash -n /Workspace/claudedot/cdot.sh)",
+      "Bash(bats *)",
+      "Bash(apt-get install *)",
+      "Bash(sudo apt-get install -y bats)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
+    ]
+  }
+}

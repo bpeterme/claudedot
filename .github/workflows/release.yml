@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    name: Tag, create GitHub release, and update Homebrew tap
+    runs-on: ubuntu-latest
+    if: github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compute CalVer version
+        id: version
+        run: |
+          today=$(date -u +%Y.%m.%d)
+          highest=$(git tag -l "${today}.*" | sed "s/^${today}\.//" | sort -n | tail -1)
+          if [[ -z "$highest" ]]; then
+            n=0
+          else
+            n=$((highest + 1))
+          fi
+          echo "value=${today}.${n}" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        run: |
+          git tag "${{ steps.version.outputs.value }}"
+          git push origin "${{ steps.version.outputs.value }}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.value }}" \
+            --title "${{ steps.version.outputs.value }}" \
+            --generate-notes \
+            --latest
+
+      - name: Compute release tarball SHA256
+        id: sha256
+        run: |
+          version="${{ steps.version.outputs.value }}"
+          url="https://github.com/bpeterme/claudedot/archive/refs/tags/${version}.tar.gz"
+          sha=""
+          for i in $(seq 1 12); do
+            if curl -fsSL -o /tmp/release.tar.gz "$url" 2>/dev/null; then
+              sha=$(sha256sum /tmp/release.tar.gz | awk '{print $1}')
+              break
+            fi
+            echo "Tarball not ready yet, retrying (${i}/12)..."
+            sleep 5
+          done
+          [[ -n "$sha" ]] || { echo "Error: tarball not available after 60s"; exit 1; }
+          echo "value=${sha}" >> "$GITHUB_OUTPUT"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+
+      - name: Update Homebrew tap formula
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          URL: ${{ steps.sha256.outputs.url }}
+          SHA256: ${{ steps.sha256.outputs.value }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/bpeterme/homebrew-claudedot.git" tap
+          cp Formula/claudedot.rb tap/Formula/claudedot.rb
+          python3 << 'EOF'
+          import os, re
+          path = "tap/Formula/claudedot.rb"
+          url  = os.environ["URL"]
+          sha  = os.environ["SHA256"]
+          with open(path) as f:
+              content = f.read()
+          content = content.replace(
+              '  license "MIT"',
+              f'  url "{url}"\n  sha256 "{sha}"\n  license "MIT"'
+          )
+          content = content.replace(
+              'assert_match "cdot HEAD-", shell_output("#{bin}/cdot version")',
+              'assert_match version.to_s, shell_output("#{bin}/cdot version")'
+          )
+          with open(path, "w") as f:
+              f.write(content)
+          EOF
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/claudedot.rb
+          git commit -m "claudedot ${VERSION}"
+          git push
