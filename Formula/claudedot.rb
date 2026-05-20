@@ -6,7 +6,7 @@ class Claudedot < Formula
   head "https://github.com/bpeterme/claudedot.git", branch: "dev"
 
   def install
-    version_str = build.head? ? "HEAD-#{`git describe --tags --always`.chomp}" : version.to_s
+    version_str = build.head? ? "HEAD-#{`git rev-parse --short HEAD`.chomp}" : version.to_s
     inreplace "cdot.sh", '_CDOT_VERSION="dev"', "_CDOT_VERSION=\"#{version_str}\""
     bin.install "cdot.sh" => "cdot"
     (share/"claudedot").install "cdot.env.example"
