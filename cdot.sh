@@ -48,7 +48,11 @@ EOF
 # ---------------------------------------------------------
 
 _CDOT_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/claudedot/cdot.env"
-[[ -f "$_CDOT_CONFIG" ]] && . "$_CDOT_CONFIG"
+if [[ -f "$_CDOT_CONFIG" ]]; then
+  . "$_CDOT_CONFIG"
+elif [[ -d "$(dirname "$_CDOT_CONFIG")" ]]; then
+  echo "⚠  cdot: config dir exists but cdot.env not found — check filename: $_CDOT_CONFIG" >&2
+fi
 unset _CDOT_CONFIG
 
 CDOT_CLAUDE_DIR="${CDOT_CLAUDE_DIR:-$HOME/.claude}"
