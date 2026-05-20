@@ -21,7 +21,6 @@ cdot — Claude environment sync
 
 Usage:
   cdot               Pull and push config + current project history
-  cdot config        Set or remove sync remote (interactive)
   cdot add           Opt current project into history sync
   cdot remove        Stop syncing current project
   cdot compact       Squash current project's history to one commit
@@ -29,12 +28,13 @@ Usage:
   cdot list          List projects with history sync and sizes
 
 Maintenance:
+  cdot config        Set or remove sync remote (interactive)
   cdot doctor        Run environment diagnostics
   cdot version       Show version
 
 Companion tools:
-  claudebox          Claude Code container runtime
-  flux               Large-file routing for your projects (git + R2 storage)
+  cbox               claudebox — Claude Code container runtime
+  flux               flux — Large-file routing for your projects (git + R2 storage)
 
 Help:
   cdot help
@@ -809,21 +809,23 @@ cdot() {
       _cdot_help
       ;;
 
-    claudebox)
+    cbox)
       if command -v cbox >/dev/null 2>&1; then
-        echo "claudebox is installed. Use: cbox help"
+        cbox help
       else
         echo "claudebox is not installed."
         echo "Install: brew tap bpeterme/claudebox && brew install bpeterme/claudebox/claudebox"
+        return 1
       fi
       ;;
 
     flux)
       if command -v flux >/dev/null 2>&1; then
-        echo "flux is installed. Use: flux help"
+        flux help
       else
         echo "flux is not installed."
         echo "Install: brew tap bpeterme/flux && brew install bpeterme/flux/flux"
+        return 1
       fi
       ;;
 
