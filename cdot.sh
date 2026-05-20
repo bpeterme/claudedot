@@ -5,7 +5,7 @@
 # Install via Homebrew:
 #   brew tap bpeterme/claudedot && brew install bpeterme/claudedot/claudedot
 # Or source this file in .bashrc or .zshrc:
-#   source /path/to/claudebox/cdot.sh
+#   source /path/to/claudedot/cdot.sh
 
 # =========================================================
 # cdot - Claude Environment Sync
