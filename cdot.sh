@@ -898,6 +898,7 @@ cdot() {
       ;;
 
     # Plumbing: called by cbox, not shown in help
+    _api-version)   echo "1" ;;
     _pull)          _cdot_pull ;;
     _push)          _cdot_push ;;
     _pull-history)  _cdot_pull_history "${2:-}" ;;
