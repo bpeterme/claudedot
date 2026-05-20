@@ -105,7 +105,7 @@ _cdot_register() {
     [[ " $current " == *" $name "* ]] && return 0
     new_value="${current:+$current }$name"
   else
-    new_value=$(printf '%s\n' $current | grep -vx "$name" | tr '\n' ' ')
+    new_value=$(printf '%s' "$current" | tr ' ' '\n' | grep -vxF "$name" | tr '\n' ' ' || true)
     new_value="${new_value% }"
   fi
 
@@ -908,5 +908,6 @@ cdot() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  set -euo pipefail
   cdot "$@"
 fi
