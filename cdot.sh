@@ -61,8 +61,8 @@ CDOT_SYNC_SIZE_WARN_MB="${CDOT_SYNC_SIZE_WARN_MB:-500}"
 
 _CDOT_VERSION="dev"
 if [[ "$_CDOT_VERSION" == "dev" ]]; then
-  _v=$(git -C "$(dirname "${BASH_SOURCE[0]}")" describe --tags --always 2>/dev/null) || true
-  [[ -n "$_v" ]] && _CDOT_VERSION="$_v"
+  _v=$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --short HEAD 2>/dev/null) || true
+  [[ -n "$_v" ]] && _CDOT_VERSION="HEAD-$_v"
   unset _v
 fi
 
