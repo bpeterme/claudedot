@@ -536,11 +536,14 @@ _cdot_push_history() {
 
   echo "Pushing history for '$name'..."
 
-  local tmp_index="$dir/.git/cdot-history-index-$$"
+  local tmp_index
+  tmp_index=$(mktemp "$dir/.git/cdot-history-index.XXXXXX")
+  trap "rm -f '$tmp_index'" RETURN
   GIT_INDEX_FILE="$tmp_index" git -C "$dir" add "projects/$project_dir/" 2>/dev/null
   local tree
   tree=$(GIT_INDEX_FILE="$tmp_index" git -C "$dir" write-tree 2>/dev/null)
   rm -f "$tmp_index"
+  trap - RETURN
 
   [[ -n "$tree" ]] || { echo "⚠  Failed to build history tree for '$name'."; return 1; }
 
@@ -628,11 +631,14 @@ _cdot_compact() {
 
   [[ -d "$dir/projects/$project_dir" ]] || { echo "No history found for '$name'."; return 1; }
 
-  local tmp_index="$dir/.git/cdot-compact-index-$$"
+  local tmp_index
+  tmp_index=$(mktemp "$dir/.git/cdot-compact-index.XXXXXX")
+  trap "rm -f '$tmp_index'" RETURN
   GIT_INDEX_FILE="$tmp_index" git -C "$dir" add "projects/$project_dir/" 2>/dev/null
   local tree
   tree=$(GIT_INDEX_FILE="$tmp_index" git -C "$dir" write-tree 2>/dev/null)
   rm -f "$tmp_index"
+  trap - RETURN
 
   [[ -n "$tree" ]] || { echo "⚠  Failed to build tree for compact."; return 1; }
 
