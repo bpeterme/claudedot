@@ -394,8 +394,12 @@ _cdot_init() {
     fi
   fi
 
-  echo "Config will now sync automatically on cbox start and exit."
-  echo "Use 'cdot add' to opt the current project into history sync."
+  if command -v cbox >/dev/null 2>&1; then
+    echo "Config will now sync automatically on cbox start and exit."
+    echo "Use 'cdot add' to opt the current project into history sync."
+  else
+    echo "Run 'cdot pull' / 'cdot push' to sync manually (auto-sync requires cbox)."
+  fi
 }
 
 _cdot_unlink() {
