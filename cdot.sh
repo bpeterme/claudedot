@@ -552,11 +552,16 @@ _cdot_push_history() {
   parent=$(git -C "$dir" rev-parse --verify "refs/remotes/origin/$branch" 2>/dev/null)
   [[ -n "$parent" ]] && parent_args=(-p "$parent")
 
-  # Skip if history hasn't changed since last push
+  # Skip if history hasn't changed since last push, but only if the remote
+  # branch actually exists — a stale local tracking ref (e.g. after cdot remove)
+  # must not suppress a fresh push.
   if [[ -n "$parent" ]]; then
     local parent_tree
     parent_tree=$(git -C "$dir" rev-parse "${parent}^{tree}" 2>/dev/null)
-    [[ "$tree" == "$parent_tree" ]] && return 0
+    if [[ "$tree" == "$parent_tree" ]]; then
+      git -C "$dir" ls-remote --heads origin "refs/heads/$branch" 2>/dev/null \
+        | grep -q . && return 0
+    fi
   fi
 
   echo "Pushing history for '$name'..."
