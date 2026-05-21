@@ -566,10 +566,13 @@ _cdot_add() {
   local branch
   branch=$(_cdot_history_branch "$name")
 
-  if git -C "$dir" rev-parse --verify "refs/remotes/origin/$branch" >/dev/null 2>&1; then
+  # Check against remote (not local tracking ref, which can be stale)
+  if git -C "$dir" ls-remote --heads origin "refs/heads/$branch" 2>/dev/null | grep -q .; then
     echo "Project '$name' is already opted into history sync on this machine."
     return 0
   fi
+  # Clean up any stale tracking ref
+  git -C "$dir" update-ref -d "refs/remotes/origin/$branch" 2>/dev/null || true
 
   local empty_tree commit
   empty_tree=$(git hash-object -t tree /dev/null)
@@ -804,29 +807,46 @@ _cdot_list() {
   [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
 
   echo "Fetching remote refs..."
-  git -C "$dir" fetch origin 2>/dev/null || true
+  # --prune removes stale local tracking refs so _cdot_is_opted_in stays accurate
+  git -C "$dir" fetch --prune origin 2>/dev/null || true
 
   local this_machine
   this_machine=$(_cdot_machine_id)
 
-  # Collect all history branches: history/<project>/<user@host>
-  local all_refs
-  all_refs=$(git -C "$dir" ls-remote --heads origin "history/*/*" 2>/dev/null | awk '{print $2}')
+  echo ""
 
-  if [[ -z "$all_refs" ]]; then
-    echo "No history branches found."
+  # ── config (main branch) ─────────────────────────────────────────────────────
+  local main_remote
+  main_remote=$(git -C "$dir" remote get-url origin 2>/dev/null || echo "none")
+  printf "  Config sync (main)  remote: %s\n" "$main_remote"
+  if git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
+    local ahead behind
+    ahead=$(git -C "$dir" rev-list --count @{u}..HEAD 2>/dev/null || echo "?")
+    behind=$(git -C "$dir" rev-list --count HEAD..@{u} 2>/dev/null || echo "?")
+    printf "                      ahead: %s  behind: %s\n" "$ahead" "$behind"
+  fi
+  echo ""
+
+  # ── history branches — read from local tracking refs (post-prune = remote) ──
+  local all_branches
+  all_branches=$(git -C "$dir" branch -r 2>/dev/null \
+    | grep "origin/history/" \
+    | sed 's|.*origin/||;s/[[:space:]]//g')
+
+  if [[ -z "$all_branches" ]]; then
+    echo "  No projects opted into history sync."
+    echo "  Use: cdot add"
     return 0
   fi
 
+  echo "  History branches:"
+
   # Extract unique machines, current machine first
   local machines
-  machines=$(echo "$all_refs" \
-    | sed 's|refs/heads/history/[^/]*/||' \
+  machines=$(echo "$all_branches" \
+    | sed 's|history/[^/]*/||' \
     | sort -u \
     | awk -v cur="$this_machine" '$0==cur{print; next} {others[NR]=$0} END{for(i in others) print others[i]}')
-
-  echo ""
-  echo "Projects with synced history:"
 
   while IFS= read -r machine; do
     [[ -z "$machine" ]] && continue
@@ -839,10 +859,14 @@ _cdot_list() {
       echo "  $machine"
     fi
 
-    while IFS= read -r ref; do
-      local branch="${ref#refs/heads/}"
+    while IFS= read -r branch; do
       local project="${branch#history/}"
       project="${project%/$machine}"
+
+      # "add — " commit message = opted in but never synced real content yet
+      local last_msg
+      last_msg=$(git -C "$dir" log -1 --format="%s" \
+        "refs/remotes/origin/$branch" 2>/dev/null)
 
       local last_date
       last_date=$(git -C "$dir" log -1 --format="%ci" \
@@ -854,13 +878,16 @@ _cdot_list() {
         size_mb=$(du -sm "$dir/projects/$project_dir" 2>/dev/null | awk '{print $1}')
 
       if [[ "$machine" == "$this_machine" ]]; then
-        printf "    ✔ %-28s  last: %s  size: %smb\n" \
-          "$project" "${last_date:-?}" "$size_mb"
+        if [[ "$last_msg" == "add — "* ]]; then
+          printf "${_CDOT_YELLOW}    ○ %-28s  [opted in — pending first sync]${_CDOT_NC}\n" "$project"
+        else
+          printf "    ✔ %-28s  last: %s  size: %smb\n" \
+            "$project" "${last_date:-?}" "$size_mb"
+        fi
       else
-        printf "      %-28s  last: %s  size: %smb\n" \
-          "$project" "${last_date:-?}" "$size_mb"
+        printf "      %-28s  last: %s\n" "$project" "${last_date:-?}"
       fi
-    done < <(echo "$all_refs" | grep "refs/heads/history/[^/]*/$machine$")
+    done < <(echo "$all_branches" | grep "history/[^/]*/$machine$")
   done <<< "$machines"
 
   echo ""
