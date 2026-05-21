@@ -510,8 +510,6 @@ _cdot_push_history() {
   local branch
   branch=$(_cdot_history_branch "$name")
 
-  echo "Pushing history for '$name'..."
-
   local tmp_index
   tmp_index=$(mktemp -u "$dir/.git/cdot-history-index.XXXXXX")
   trap "rm -f '$tmp_index'" RETURN
@@ -548,7 +546,7 @@ _cdot_push_history() {
 
   [[ -n "$commit" ]] || { echo "⚠  Failed to create history commit for '$name'."; return 1; }
 
-  if git -C "$dir" push origin "$commit:refs/heads/$branch" 2>&1; then
+  if git -C "$dir" push origin "$commit:refs/heads/$branch" >/dev/null 2>&1; then
     _cdot_size_check
     return 0
   else
