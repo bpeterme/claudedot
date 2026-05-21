@@ -59,7 +59,6 @@ fi
 unset _CDOT_CONFIG
 
 CDOT_CLAUDE_DIR="${CDOT_CLAUDE_DIR:-$HOME/.claude}"
-CDOT_SYNC_PROJECTS="${CDOT_SYNC_PROJECTS:-}"
 CDOT_SYNC_SIZE_WARN_MB="${CDOT_SYNC_SIZE_WARN_MB:-500}"
 
 _CDOT_VERSION="dev"
@@ -95,32 +94,11 @@ _cdot_history_branch() {
 }
 
 _cdot_is_opted_in() {
-  [[ " ${CDOT_SYNC_PROJECTS:-} " == *" $1 "* ]]
-}
-
-_cdot_register() {
-  local name="$1" action="$2"
-  local config="${XDG_CONFIG_HOME:-$HOME/.config}/claudedot/cdot.env"
-  local current="${CDOT_SYNC_PROJECTS:-}"
-  local new_value
-
-  if [[ "$action" == "add" ]]; then
-    [[ " $current " == *" $name "* ]] && return 0
-    new_value="${current:+$current }$name"
-  else
-    new_value=$(printf '%s' "$current" | tr ' ' '\n' | grep -vxF "$name" | tr '\n' ' ' || true)
-    new_value="${new_value% }"
-  fi
-
-  local tmp
-  tmp=$(mktemp)
-  mkdir -p "$(dirname "$config")"
-  if [[ -f "$config" ]]; then
-    grep -v "^CDOT_SYNC_PROJECTS=" "$config" > "$tmp" || true
-  fi
-  printf 'CDOT_SYNC_PROJECTS="%s"\n' "$new_value" >> "$tmp"
-  mv "$tmp" "$config"
-  CDOT_SYNC_PROJECTS="$new_value"
+  local name="$1"
+  local branch
+  branch=$(_cdot_history_branch "$name")
+  git -C "$CDOT_CLAUDE_DIR" rev-parse --verify \
+    "refs/remotes/origin/$branch" >/dev/null 2>&1 || return 1
 }
 
 # ---------------------------------------------------------
@@ -423,8 +401,12 @@ _cdot_unlink() {
     echo "  $dir/.git"
     echo "Remote: $remote"
     echo ""
-    if [[ -n "${CDOT_SYNC_PROJECTS:-}" ]]; then
-      echo "Projects currently opted in: $CDOT_SYNC_PROJECTS"
+    local synced_count machine
+    machine=$(_cdot_machine_id)
+    synced_count=$(git -C "$dir" branch -r 2>/dev/null \
+      | grep -c "origin/history/[^/]*/$machine$" || true)
+    if (( synced_count > 0 )); then
+      echo "Synced projects on this machine: $synced_count"
       echo "Their local history branches will be deleted with the repo."
       echo ""
     fi
@@ -437,15 +419,6 @@ _cdot_unlink() {
 
   rm -rf "$dir/.git"
   rm -f "$dir/.gitignore"
-
-  local config="${XDG_CONFIG_HOME:-$HOME/.config}/claudedot/cdot.env"
-  if [[ -f "$config" ]]; then
-    local tmp
-    tmp=$(mktemp)
-    grep -v "^CDOT_SYNC_PROJECTS=" "$config" > "$tmp" || true
-    mv "$tmp" "$config"
-  fi
-  CDOT_SYNC_PROJECTS=""
 
   echo "✔ Sync unlinked. Config files remain at $dir"
   echo "  Run 'cdot config' to set up sync again."
@@ -590,14 +563,30 @@ _cdot_add() {
   local dir="$CDOT_CLAUDE_DIR"
   [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
 
-  if _cdot_is_opted_in "$name"; then
+  local branch
+  branch=$(_cdot_history_branch "$name")
+
+  if git -C "$dir" rev-parse --verify "refs/remotes/origin/$branch" >/dev/null 2>&1; then
     echo "Project '$name' is already opted into history sync on this machine."
     return 0
   fi
 
-  _cdot_register "$name" add
-  _cdot_push_history "$name"
-  echo "✔ Project '$name' opted into history sync on this machine."
+  local empty_tree commit
+  empty_tree=$(git hash-object -t tree /dev/null)
+  commit=$(git -C "$dir" commit-tree "$empty_tree" \
+    -m "add — $(_cdot_machine_id) — $(date -u +%Y-%m-%dT%H:%M:%SZ)" 2>/dev/null || true)
+
+  [[ -n "$commit" ]] || { echo "⚠  Failed to create initial commit."; return 1; }
+
+  if git -C "$dir" push origin "$commit:refs/heads/$branch" 2>&1; then
+    git -C "$dir" fetch origin \
+      "refs/heads/$branch:refs/remotes/origin/$branch" >/dev/null 2>&1 || true
+    echo "✔ Project '$name' opted into history sync on this machine."
+    echo "  History will be pushed on next cbox session."
+  else
+    echo "⚠  Failed to opt '$name' into history sync."
+    return 1
+  fi
 }
 
 _cdot_remove() {
@@ -605,21 +594,20 @@ _cdot_remove() {
   local dir="$CDOT_CLAUDE_DIR"
   [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
 
-  if ! _cdot_is_opted_in "$name"; then
-    echo "Project '$name' is not opted into history sync."
-    return 1
-  fi
-
   local branch
   branch=$(_cdot_history_branch "$name")
 
-  _cdot_register "$name" remove
+  if ! git -C "$dir" rev-parse --verify "refs/remotes/origin/$branch" >/dev/null 2>&1; then
+    echo "Project '$name' is not opted into history sync on this machine."
+    return 1
+  fi
 
   if git -C "$dir" push origin --delete "$branch" 2>/dev/null; then
     echo "✔ History for '$name' removed from remote."
   else
     echo "⚠  Could not delete remote branch (may not exist)."
   fi
+  git -C "$dir" update-ref -d "refs/remotes/origin/$branch" 2>/dev/null || true
   echo "   '$name' removed from history sync on this machine."
 }
 
@@ -657,9 +645,11 @@ _cdot_delete() {
     fi
   done <<< "$branches"
 
-  if _cdot_is_opted_in "$name"; then
-    _cdot_register "$name" remove
-    echo "✔ '$name' removed from local sync list."
+  local this_branch
+  this_branch=$(_cdot_history_branch "$name")
+  if git -C "$dir" rev-parse --verify "refs/remotes/origin/$this_branch" >/dev/null 2>&1; then
+    git -C "$dir" update-ref -d "refs/remotes/origin/$this_branch" 2>/dev/null || true
+    echo "✔ '$name' removed from local tracking refs on this machine."
   fi
 
   $failed && echo "⚠  Some branches could not be deleted." || \
@@ -824,18 +814,7 @@ _cdot_list() {
   all_refs=$(git -C "$dir" ls-remote --heads origin "history/*/*" 2>/dev/null | awk '{print $2}')
 
   if [[ -z "$all_refs" ]]; then
-    if [[ -n "${CDOT_SYNC_PROJECTS:-}" ]]; then
-      echo ""
-      echo "Projects with synced history:"
-      echo ""
-      echo "  $this_machine  [this machine — pending first sync]"
-      for project in $CDOT_SYNC_PROJECTS; do
-        printf "    ${_CDOT_YELLOW}✔ %-28s  [active — not yet synced]${_CDOT_NC}\n" "$project"
-      done
-      echo ""
-    else
-      echo "No history branches found."
-    fi
+    echo "No history branches found."
     return 0
   fi
 
@@ -844,15 +823,13 @@ _cdot_list() {
   machines=$(echo "$all_refs" \
     | sed 's|refs/heads/history/[^/]*/||' \
     | sort -u \
-    | awk -v cur="$this_machine" 'BEGIN{printed=0} $0==cur{print; printed=1} $0!=cur{others[NR]=$0} END{for(i in others) print others[i]}')
+    | awk -v cur="$this_machine" '$0==cur{print; next} {others[NR]=$0} END{for(i in others) print others[i]}')
 
   echo ""
   echo "Projects with synced history:"
 
-  local found_any=false
   while IFS= read -r machine; do
     [[ -z "$machine" ]] && continue
-    found_any=true
 
     if [[ "$machine" == "$this_machine" ]]; then
       echo ""
@@ -877,35 +854,14 @@ _cdot_list() {
         size_mb=$(du -sm "$dir/projects/$project_dir" 2>/dev/null | awk '{print $1}')
 
       if [[ "$machine" == "$this_machine" ]]; then
-        if _cdot_is_opted_in "$project"; then
-          printf "    ✔ %-28s  last: %s  size: %smb  [active]\n" \
-            "$project" "${last_date:-?}" "$size_mb"
-        else
-          printf "    ○ %-28s  last: %s  size: %smb  [inactive]\n" \
-            "$project" "${last_date:-?}" "$size_mb"
-        fi
+        printf "    ✔ %-28s  last: %s  size: %smb\n" \
+          "$project" "${last_date:-?}" "$size_mb"
       else
         printf "      %-28s  last: %s  size: %smb\n" \
           "$project" "${last_date:-?}" "$size_mb"
       fi
     done < <(echo "$all_refs" | grep "refs/heads/history/[^/]*/$machine$")
   done <<< "$machines"
-
-  # Show opted-in projects that have no remote history yet
-  if [[ -n "${CDOT_SYNC_PROJECTS:-}" ]]; then
-    local pending=()
-    for project in $CDOT_SYNC_PROJECTS; do
-      echo "$all_refs" | grep -q "refs/heads/history/$project/$this_machine$" || \
-        pending+=("$project")
-    done
-    if [[ ${#pending[@]} -gt 0 ]]; then
-      echo ""
-      echo "  $this_machine  [this machine — pending first sync]"
-      for project in "${pending[@]}"; do
-        printf "    ${_CDOT_YELLOW}✔ %-28s  [active — not yet synced]${_CDOT_NC}\n" "$project"
-      done
-    fi
-  fi
 
   echo ""
 }
@@ -925,8 +881,12 @@ _cdot_doctor_inline() {
     behind=$(git -C "$CDOT_CLAUDE_DIR" rev-list --count HEAD..@{u} 2>/dev/null || echo "?")
     echo "  ahead: $ahead  behind: $behind"
 
-    if [[ -n "${CDOT_SYNC_PROJECTS:-}" ]]; then
-      echo "  history projects: $CDOT_SYNC_PROJECTS"
+    local machine synced_count
+    machine=$(_cdot_machine_id)
+    synced_count=$(git -C "$CDOT_CLAUDE_DIR" branch -r 2>/dev/null \
+      | grep -c "origin/history/[^/]*/$machine$" || true)
+    if (( synced_count > 0 )); then
+      echo "  history projects: $synced_count synced on this machine"
     else
       echo "  history projects: none (use: cdot add)"
     fi
