@@ -821,7 +821,21 @@ _cdot_list() {
   local all_refs
   all_refs=$(git -C "$dir" ls-remote --heads origin "history/*/*" 2>/dev/null | awk '{print $2}')
 
-  [[ -n "$all_refs" ]] || { echo "No history branches found."; return 0; }
+  if [[ -z "$all_refs" ]]; then
+    if [[ -n "${CDOT_SYNC_PROJECTS:-}" ]]; then
+      echo ""
+      echo "Projects with synced history:"
+      echo ""
+      echo "  $this_machine  [this machine — pending first sync]"
+      for project in $CDOT_SYNC_PROJECTS; do
+        printf "    ✔ %-28s  [active — not yet synced]\n" "$project"
+      done
+      echo ""
+    else
+      echo "No history branches found."
+    fi
+    return 0
+  fi
 
   # Extract unique machines, current machine first
   local machines
@@ -874,6 +888,22 @@ _cdot_list() {
       fi
     done < <(echo "$all_refs" | grep "refs/heads/history/[^/]*/$machine$")
   done <<< "$machines"
+
+  # Show opted-in projects that have no remote history yet
+  if [[ -n "${CDOT_SYNC_PROJECTS:-}" ]]; then
+    local pending=()
+    for project in $CDOT_SYNC_PROJECTS; do
+      echo "$all_refs" | grep -q "refs/heads/history/$project/$this_machine$" || \
+        pending+=("$project")
+    done
+    if [[ ${#pending[@]} -gt 0 ]]; then
+      echo ""
+      echo "  $this_machine  [this machine — pending first sync]"
+      for project in "${pending[@]}"; do
+        printf "    ✔ %-28s  [active — not yet synced]\n" "$project"
+      done
+    fi
+  fi
 
   echo ""
 }
