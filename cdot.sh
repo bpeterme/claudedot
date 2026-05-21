@@ -886,7 +886,7 @@ cdot() {
 
     config)   _cdot_config ;;
     add)      _cdot_add "$name" ;;
-    remove)   _cdot_remove "$name" ;;
+    remove)   _cdot_remove "${2:-$name}" ;;
     compact)  _cdot_compact "$name" ;;
     prune)    _cdot_prune "$name" "${@:2}" ;;
     list)     _cdot_list ;;
