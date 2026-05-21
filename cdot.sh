@@ -843,8 +843,26 @@ _cdot_doctor() {
     || echo "✘ Claude config dir missing ($CDOT_CLAUDE_DIR)"
 
   echo
-  echo "[sync]"
+  echo "[cdot]"
   _cdot_doctor_inline
+
+  echo
+  echo "[cbox]"
+  if command -v cbox >/dev/null 2>&1; then
+    cbox _doctor
+  else
+    echo "ℹ cbox not installed"
+    echo "  Install: brew tap bpeterme/claudebox && brew install claudebox"
+  fi
+
+  echo
+  echo "[flux]"
+  if command -v flux >/dev/null 2>&1; then
+    flux _doctor
+  else
+    echo "ℹ flux not installed — large-file sync unavailable"
+    echo "  Install: brew tap bpeterme/flux && brew install flux"
+  fi
 }
 
 # ---------------------------------------------------------
