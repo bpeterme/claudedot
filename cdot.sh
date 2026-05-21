@@ -24,6 +24,7 @@ Usage:
   cdot list          List projects with history sync and sizes
   cdot add           Opt current project into history sync
   cdot remove        Stop syncing current project
+  cdot delete        Delete all sync history for a project across all machines
   cdot compact       Squash current project's history to one commit
   cdot prune         Remove old/oversized history branches (--all: all projects)
 
@@ -620,6 +621,49 @@ _cdot_remove() {
   echo "   '$name' removed from history sync on this machine."
 }
 
+_cdot_delete() {
+  local name="$1"
+  local dir="$CDOT_CLAUDE_DIR"
+  [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
+  [[ -n "$name" ]] || { echo "Usage: cdot delete <project>"; return 1; }
+
+  echo "Fetching remote refs..."
+  git -C "$dir" fetch origin 2>/dev/null || true
+
+  local branches
+  branches=$(git -C "$dir" ls-remote --heads origin "history/$name/*" 2>/dev/null \
+    | awk '{print $2}' | sed 's|refs/heads/||')
+
+  if [[ -z "$branches" ]]; then
+    echo "No remote history found for '$name'."
+    return 1
+  fi
+
+  echo "This will delete all remote history branches for '$name':"
+  echo "$branches" | sed 's/^/  /'
+  printf "Continue? [y/N] "
+  read -r answer
+  [[ "$answer" =~ ^[Yy]$ ]] || { echo "Aborted."; return 0; }
+
+  local failed=false
+  while IFS= read -r branch; do
+    if git -C "$dir" push origin --delete "$branch" 2>/dev/null; then
+      echo "✔ Deleted $branch"
+    else
+      echo "⚠  Could not delete $branch"
+      failed=true
+    fi
+  done <<< "$branches"
+
+  if _cdot_is_opted_in "$name"; then
+    _cdot_register "$name" remove
+    echo "✔ '$name' removed from local sync list."
+  fi
+
+  $failed && echo "⚠  Some branches could not be deleted." || \
+    echo "✔ All remote history for '$name' deleted."
+}
+
 _cdot_compact() {
   local name="$1"
   local dir="$CDOT_CLAUDE_DIR"
@@ -919,6 +963,7 @@ cdot() {
     config)   _cdot_config ;;
     add)      _cdot_add "$name" ;;
     remove)   _cdot_remove "${2:-$name}" ;;
+    delete)   _cdot_delete "${2:-}" ;;
     compact)  _cdot_compact "$name" ;;
     prune)    _cdot_prune "$name" "${@:2}" ;;
     list)     _cdot_list ;;
