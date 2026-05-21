@@ -846,12 +846,29 @@ _cdot_list() {
     return 0
   fi
 
+  # All unique project names across all machines
+  local all_projects
+  all_projects=$(echo "$all_branches" \
+    | sed 's|history/\([^/]*\)/.*|\1|' \
+    | sort -u)
+
+  # Projects opted in on this machine
+  local this_machine_projects
+  this_machine_projects=$(echo "$all_branches" \
+    | grep "history/[^/]*/$this_machine$" \
+    | sed "s|history/\([^/]*\)/$this_machine\$|\1|")
+
   # Extract unique machines, current machine first
   local machines
   machines=$(echo "$all_branches" \
     | sed 's|history/[^/]*/||' \
     | sort -u \
     | awk -v cur="$this_machine" '$0==cur{print; next} {others[NR]=$0} END{for(i in others) print others[i]}')
+
+  # If this machine has no branches at all, still show the section header
+  if ! echo "$machines" | grep -qx "$this_machine"; then
+    machines=$(printf "%s\n%s" "$this_machine" "$machines")
+  fi
 
   while IFS= read -r machine; do
     [[ -z "$machine" ]] && continue
@@ -891,6 +908,15 @@ _cdot_list() {
         printf "      %-28s  last: %s\n" "$project" "${last_date:-?}"
       fi
     done < <(echo "$all_branches" | grep "history/[^/]*/$machine$")
+
+    # For this machine: show projects synced elsewhere but not opted in here
+    if [[ "$machine" == "$this_machine" ]]; then
+      while IFS= read -r project; do
+        [[ -z "$project" ]] && continue
+        echo "$this_machine_projects" | grep -qx "$project" && continue
+        printf "    · %-28s  [not opted in — use: cdot add]\n" "$project"
+      done <<< "$all_projects"
+    fi
   done <<< "$machines"
 
   echo ""
