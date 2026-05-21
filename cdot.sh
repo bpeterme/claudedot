@@ -11,6 +11,8 @@
 # cdot - Claude Environment Sync
 # =========================================================
 
+_CDOT_YELLOW='\033[1;33m'; _CDOT_NC='\033[0m'
+
 # ---------------------------------------------------------
 # help
 # ---------------------------------------------------------
@@ -828,7 +830,7 @@ _cdot_list() {
       echo ""
       echo "  $this_machine  [this machine — pending first sync]"
       for project in $CDOT_SYNC_PROJECTS; do
-        printf "    ✔ %-28s  [active — not yet synced]\n" "$project"
+        printf "    ${_CDOT_YELLOW}✔ %-28s  [active — not yet synced]${_CDOT_NC}\n" "$project"
       done
       echo ""
     else
@@ -900,7 +902,7 @@ _cdot_list() {
       echo ""
       echo "  $this_machine  [this machine — pending first sync]"
       for project in "${pending[@]}"; do
-        printf "    ✔ %-28s  [active — not yet synced]\n" "$project"
+        printf "    ${_CDOT_YELLOW}✔ %-28s  [active — not yet synced]${_CDOT_NC}\n" "$project"
       done
     fi
   fi
