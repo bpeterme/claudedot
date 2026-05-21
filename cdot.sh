@@ -21,11 +21,11 @@ cdot — Claude environment sync
 
 Usage:
   cdot               Pull and push config + current project history
+  cdot list          List projects with history sync and sizes
   cdot add           Opt current project into history sync
   cdot remove        Stop syncing current project
   cdot compact       Squash current project's history to one commit
   cdot prune         Remove old/oversized history branches (--all: all projects)
-  cdot list          List projects with history sync and sizes
 
 Maintenance:
   cdot config        Set or remove sync remote (interactive)
