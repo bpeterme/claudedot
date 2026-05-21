@@ -817,13 +817,22 @@ _cdot_list() {
   # ── config (main branch) ─────────────────────────────────────────────────────
   local main_remote
   main_remote=$(git -C "$dir" remote get-url origin 2>/dev/null || echo "none")
+  printf "\n  configuration files\n"
   if git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
     local ahead behind
-    ahead=$(git -C "$dir" rev-list --count @{u}..HEAD 2>/dev/null || echo "?")
-    behind=$(git -C "$dir" rev-list --count HEAD..@{u} 2>/dev/null || echo "?")
-    printf "\n  main  ↑%s ↓%s  %s\n" "$ahead" "$behind" "$main_remote"
+    ahead=$(git -C "$dir" rev-list --count @{u}..HEAD 2>/dev/null || echo "0")
+    behind=$(git -C "$dir" rev-list --count HEAD..@{u} 2>/dev/null || echo "0")
+    if [[ "$ahead" == "0" && "$behind" == "0" ]]; then
+      printf "    ✔ %s  [in sync]\n" "$main_remote"
+    elif [[ "$ahead" != "0" && "$behind" == "0" ]]; then
+      printf "${_CDOT_YELLOW}    ○ %s  [unpushed]${_CDOT_NC}\n" "$main_remote"
+    elif [[ "$ahead" == "0" ]]; then
+      printf "${_CDOT_YELLOW}    ○ %s  [behind]${_CDOT_NC}\n" "$main_remote"
+    else
+      printf "${_CDOT_YELLOW}    ○ %s  [diverged]${_CDOT_NC}\n" "$main_remote"
+    fi
   else
-    printf "\n  main  %s\n" "$main_remote"
+    printf "    ○ %s  [no upstream]\n" "$main_remote"
   fi
 
   # ── history branches — read from local tracking refs (post-prune = remote) ──
