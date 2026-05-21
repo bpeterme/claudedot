@@ -52,7 +52,16 @@ setup() {
 # ---------------------------------------------------------------------------
 
 @test "_cdot_is_opted_in: returns true when project is in list" {
-  CDOT_SYNC_PROJECTS="alpha bravo charlie"
+  CDOT_CLAUDE_DIR="$BATS_TMPDIR/opted-in-true"
+  rm -rf "$CDOT_CLAUDE_DIR" && mkdir -p "$CDOT_CLAUDE_DIR"
+  git -C "$CDOT_CLAUDE_DIR" init 2>/dev/null
+  git -C "$CDOT_CLAUDE_DIR" config user.email "t@t.com"
+  git -C "$CDOT_CLAUDE_DIR" config user.name "T"
+  git -C "$CDOT_CLAUDE_DIR" commit --allow-empty -m "test" 2>/dev/null
+  local branch
+  branch=$(_cdot_history_branch "bravo")
+  git -C "$CDOT_CLAUDE_DIR" update-ref "refs/remotes/origin/$branch" \
+    "$(git -C "$CDOT_CLAUDE_DIR" rev-parse HEAD)"
   run _cdot_is_opted_in "bravo"
   [ "$status" -eq 0 ]
 }
@@ -76,94 +85,18 @@ setup() {
 }
 
 @test "_cdot_is_opted_in: matches sole entry in list" {
-  CDOT_SYNC_PROJECTS="only"
+  CDOT_CLAUDE_DIR="$BATS_TMPDIR/opted-in-sole"
+  rm -rf "$CDOT_CLAUDE_DIR" && mkdir -p "$CDOT_CLAUDE_DIR"
+  git -C "$CDOT_CLAUDE_DIR" init 2>/dev/null
+  git -C "$CDOT_CLAUDE_DIR" config user.email "t@t.com"
+  git -C "$CDOT_CLAUDE_DIR" config user.name "T"
+  git -C "$CDOT_CLAUDE_DIR" commit --allow-empty -m "test" 2>/dev/null
+  local branch
+  branch=$(_cdot_history_branch "only")
+  git -C "$CDOT_CLAUDE_DIR" update-ref "refs/remotes/origin/$branch" \
+    "$(git -C "$CDOT_CLAUDE_DIR" rev-parse HEAD)"
   run _cdot_is_opted_in "only"
   [ "$status" -eq 0 ]
-}
-
-# ---------------------------------------------------------------------------
-# _cdot_register
-# ---------------------------------------------------------------------------
-
-@test "_cdot_register add: creates cdot.env when absent" {
-  local config="${XDG_CONFIG_HOME:-$HOME/.config}/claudedot/cdot.env"
-  rm -f "$config"
-  CDOT_SYNC_PROJECTS=""
-  _cdot_register "myproject" "add"
-  [ -f "$config" ]
-}
-
-@test "_cdot_register add: writes project into CDOT_SYNC_PROJECTS in config" {
-  CDOT_SYNC_PROJECTS=""
-  _cdot_register "myproject" "add"
-  local config="${XDG_CONFIG_HOME:-$HOME/.config}/claudedot/cdot.env"
-  run grep "^CDOT_SYNC_PROJECTS=" "$config"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"myproject"* ]]
-}
-
-@test "_cdot_register add: uses CDOT_ prefix, not CBOX_ prefix" {
-  CDOT_SYNC_PROJECTS=""
-  _cdot_register "myproject" "add"
-  local config="${XDG_CONFIG_HOME:-$HOME/.config}/claudedot/cdot.env"
-  run grep "^CBOX_SYNC_PROJECTS=" "$config"
-  [ "$status" -ne 0 ]
-}
-
-@test "_cdot_register add: updates in-memory CDOT_SYNC_PROJECTS" {
-  CDOT_SYNC_PROJECTS=""
-  _cdot_register "myproject" "add"
-  [[ " $CDOT_SYNC_PROJECTS " == *" myproject "* ]]
-}
-
-@test "_cdot_register add: is idempotent" {
-  CDOT_SYNC_PROJECTS="myproject"
-  _cdot_register "myproject" "add"
-  local count
-  count=$(printf '%s\n' $CDOT_SYNC_PROJECTS | grep -cx "myproject")
-  [ "$count" -eq 1 ]
-}
-
-@test "_cdot_register add: appends to existing projects" {
-  CDOT_SYNC_PROJECTS="alpha"
-  _cdot_register "bravo" "add"
-  [[ " $CDOT_SYNC_PROJECTS " == *" alpha "* ]]
-  [[ " $CDOT_SYNC_PROJECTS " == *" bravo "* ]]
-}
-
-@test "_cdot_register add: preserves other lines in cdot.env" {
-  local config="${XDG_CONFIG_HOME:-$HOME/.config}/claudedot/cdot.env"
-  echo 'CBOX_IMAGE="myimage"' > "$config"
-  CDOT_SYNC_PROJECTS=""
-  _cdot_register "myproject" "add"
-  run grep "^CBOX_IMAGE=" "$config"
-  [ "$status" -eq 0 ]
-}
-
-@test "_cdot_register remove: removes project from list" {
-  CDOT_SYNC_PROJECTS="alpha bravo charlie"
-  _cdot_register "bravo" "remove"
-  [[ " $CDOT_SYNC_PROJECTS " != *" bravo "* ]]
-}
-
-@test "_cdot_register remove: retains other projects" {
-  CDOT_SYNC_PROJECTS="alpha bravo charlie"
-  _cdot_register "bravo" "remove"
-  [[ " $CDOT_SYNC_PROJECTS " == *" alpha "* ]]
-  [[ " $CDOT_SYNC_PROJECTS " == *" charlie "* ]]
-}
-
-@test "_cdot_register remove: handles removing sole project" {
-  CDOT_SYNC_PROJECTS="only"
-  _cdot_register "only" "remove"
-  [ -z "$CDOT_SYNC_PROJECTS" ]
-}
-
-@test "_cdot_register remove: no-op when project not in list" {
-  CDOT_SYNC_PROJECTS="alpha charlie"
-  _cdot_register "bravo" "remove"
-  [[ " $CDOT_SYNC_PROJECTS " == *" alpha "* ]]
-  [[ " $CDOT_SYNC_PROJECTS " == *" charlie "* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -320,27 +253,6 @@ setup() {
   [ ! -f "$CDOT_CLAUDE_DIR/.gitignore" ]
 }
 
-@test "_cdot_unlink --force: clears CDOT_SYNC_PROJECTS from cdot.env" {
-  CDOT_CLAUDE_DIR="$BATS_TMPDIR/unlink-env"
-  mkdir -p "$CDOT_CLAUDE_DIR"
-  git -C "$CDOT_CLAUDE_DIR" init 2>/dev/null
-  local config="${XDG_CONFIG_HOME:-$HOME/.config}/claudedot/cdot.env"
-  mkdir -p "$(dirname "$config")"
-  echo 'CDOT_SYNC_PROJECTS="alpha bravo"' > "$config"
-  CDOT_SYNC_PROJECTS="alpha bravo"
-  _cdot_unlink --force
-  run grep "^CDOT_SYNC_PROJECTS=" "$config"
-  [ "$status" -ne 0 ]
-}
-
-@test "_cdot_unlink --force: clears CDOT_SYNC_PROJECTS in memory" {
-  CDOT_CLAUDE_DIR="$BATS_TMPDIR/unlink-mem"
-  mkdir -p "$CDOT_CLAUDE_DIR"
-  git -C "$CDOT_CLAUDE_DIR" init 2>/dev/null
-  CDOT_SYNC_PROJECTS="alpha bravo"
-  _cdot_unlink --force
-  [ -z "$CDOT_SYNC_PROJECTS" ]
-}
 
 @test "_cdot_unlink: aborts without removing .git when user declines" {
   CDOT_CLAUDE_DIR="$BATS_TMPDIR/unlink-abort"
@@ -411,9 +323,19 @@ setup() {
 
 @test "_cdot_add: reports already opted in when project is in list" {
   CDOT_CLAUDE_DIR="$BATS_TMPDIR/add-opted-in"
+  local fake_remote="$BATS_TMPDIR/add-opted-in-remote.git"
+  rm -rf "$CDOT_CLAUDE_DIR" "$fake_remote"
   mkdir -p "$CDOT_CLAUDE_DIR"
+  git init --bare "$fake_remote" 2>/dev/null
   git -C "$CDOT_CLAUDE_DIR" init 2>/dev/null
-  CDOT_SYNC_PROJECTS="myproject"
+  git -C "$CDOT_CLAUDE_DIR" config user.email "t@t.com"
+  git -C "$CDOT_CLAUDE_DIR" config user.name "T"
+  git -C "$CDOT_CLAUDE_DIR" remote add origin "$fake_remote"
+  git -C "$CDOT_CLAUDE_DIR" commit --allow-empty -m "test" 2>/dev/null
+  local branch head
+  branch=$(_cdot_history_branch "myproject")
+  head=$(git -C "$CDOT_CLAUDE_DIR" rev-parse HEAD)
+  git -C "$CDOT_CLAUDE_DIR" push origin "$head:refs/heads/$branch" 2>/dev/null
   run _cdot_add "myproject"
   [ "$status" -eq 0 ]
   [[ "$output" == *"already opted into"* ]]
