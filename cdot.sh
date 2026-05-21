@@ -813,19 +813,18 @@ _cdot_list() {
   local this_machine
   this_machine=$(_cdot_machine_id)
 
-  echo ""
 
   # ── config (main branch) ─────────────────────────────────────────────────────
   local main_remote
   main_remote=$(git -C "$dir" remote get-url origin 2>/dev/null || echo "none")
-  printf "  Config sync (main)  remote: %s\n" "$main_remote"
   if git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
     local ahead behind
     ahead=$(git -C "$dir" rev-list --count @{u}..HEAD 2>/dev/null || echo "?")
     behind=$(git -C "$dir" rev-list --count HEAD..@{u} 2>/dev/null || echo "?")
-    printf "                      ahead: %s  behind: %s\n" "$ahead" "$behind"
+    printf "\n  main  ↑%s ↓%s  %s\n" "$ahead" "$behind" "$main_remote"
+  else
+    printf "\n  main  %s\n" "$main_remote"
   fi
-  echo ""
 
   # ── history branches — read from local tracking refs (post-prune = remote) ──
   local all_branches
@@ -834,12 +833,9 @@ _cdot_list() {
     | sed 's|.*origin/||;s/[[:space:]]//g')
 
   if [[ -z "$all_branches" ]]; then
-    echo "  No projects opted into history sync."
-    echo "  Use: cdot add"
+    printf "\n  No projects opted into history sync. Use: cdot add\n\n"
     return 0
   fi
-
-  echo "  History branches:"
 
   # Extract unique machines, current machine first
   local machines
@@ -852,11 +848,9 @@ _cdot_list() {
     [[ -z "$machine" ]] && continue
 
     if [[ "$machine" == "$this_machine" ]]; then
-      echo ""
-      echo "  $machine  [this machine]"
+      printf "\n  %s  [this machine]\n" "$machine"
     else
-      echo ""
-      echo "  $machine"
+      printf "\n  %s\n" "$machine"
     fi
 
     while IFS= read -r branch; do
@@ -879,7 +873,7 @@ _cdot_list() {
 
       if [[ "$machine" == "$this_machine" ]]; then
         if [[ "$last_msg" == "add — "* ]]; then
-          printf "${_CDOT_YELLOW}    ○ %-28s  [opted in — pending first sync]${_CDOT_NC}\n" "$project"
+          printf "${_CDOT_YELLOW}    ○ %-28s  [pending first sync]${_CDOT_NC}\n" "$project"
         else
           printf "    ✔ %-28s  last: %s  size: %smb\n" \
             "$project" "${last_date:-?}" "$size_mb"
