@@ -770,36 +770,68 @@ _cdot_list() {
   echo "Fetching remote refs..."
   git -C "$dir" fetch origin 2>/dev/null || true
 
-  local host
-  host=$(_cdot_machine_id)
-  local found=false
+  local this_machine
+  this_machine=$(_cdot_machine_id)
 
-  while IFS= read -r ref; do
-    found=true
-    local branch="${ref#refs/heads/}"
-    local project="${branch#history/}"
-    project="${project%/$host}"
+  # Collect all history branches: history/<project>/<user@host>
+  local all_refs
+  all_refs=$(git -C "$dir" ls-remote --heads origin "history/*/*" 2>/dev/null | awk '{print $2}')
 
-    local project_dir
-    project_dir=$(_cdot_project_dir "$project")
+  [[ -n "$all_refs" ]] || { echo "No history branches found."; return 0; }
 
-    local last_date
-    last_date=$(git -C "$dir" log -1 --format="%ci" \
-      "refs/remotes/origin/$branch" 2>/dev/null | cut -d' ' -f1)
+  # Extract unique machines, current machine first
+  local machines
+  machines=$(echo "$all_refs" \
+    | sed 's|refs/heads/history/[^/]*/||' \
+    | sort -u \
+    | awk -v cur="$this_machine" 'BEGIN{printed=0} $0==cur{print; printed=1} $0!=cur{others[NR]=$0} END{for(i in others) print others[i]}')
 
-    local size_mb="?"
-    [[ -d "$dir/projects/$project_dir" ]] && \
-      size_mb=$(du -sm "$dir/projects/$project_dir" 2>/dev/null | awk '{print $1}')
+  echo ""
+  echo "Projects with synced history:"
 
-    local opted=""
-    _cdot_is_opted_in "$project" && opted=" ✔"
+  local found_any=false
+  while IFS= read -r machine; do
+    [[ -z "$machine" ]] && continue
+    found_any=true
 
-    printf "  %-30s  last: %s  size: %smb%s\n" \
-      "$project" "${last_date:-?}" "$size_mb" "$opted"
-  done < <(git -C "$dir" ls-remote --heads origin "history/*/$host" 2>/dev/null \
-    | awk '{print $2}')
+    if [[ "$machine" == "$this_machine" ]]; then
+      echo ""
+      echo "  $machine  [this machine]"
+    else
+      echo ""
+      echo "  $machine"
+    fi
 
-  $found || echo "No history branches found for this machine."
+    while IFS= read -r ref; do
+      local branch="${ref#refs/heads/}"
+      local project="${branch#history/}"
+      project="${project%/$machine}"
+
+      local last_date
+      last_date=$(git -C "$dir" log -1 --format="%ci" \
+        "refs/remotes/origin/$branch" 2>/dev/null | cut -d' ' -f1)
+
+      local project_dir size_mb="?"
+      project_dir=$(_cdot_project_dir "$project")
+      [[ -d "$dir/projects/$project_dir" ]] && \
+        size_mb=$(du -sm "$dir/projects/$project_dir" 2>/dev/null | awk '{print $1}')
+
+      if [[ "$machine" == "$this_machine" ]]; then
+        if _cdot_is_opted_in "$project"; then
+          printf "    ✔ %-28s  last: %s  size: %smb  [active]\n" \
+            "$project" "${last_date:-?}" "$size_mb"
+        else
+          printf "    ○ %-28s  last: %s  size: %smb  [inactive]\n" \
+            "$project" "${last_date:-?}" "$size_mb"
+        fi
+      else
+        printf "      %-28s  last: %s  size: %smb\n" \
+          "$project" "${last_date:-?}" "$size_mb"
+      fi
+    done < <(echo "$all_refs" | grep "refs/heads/history/[^/]*/$machine$")
+  done <<< "$machines"
+
+  echo ""
 }
 
 # ---------------------------------------------------------
