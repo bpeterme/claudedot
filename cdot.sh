@@ -884,7 +884,7 @@ _cdot_list() {
         if [[ "$last_msg" == "add — "* ]]; then
           printf "${_CDOT_YELLOW}    ○ %-28s  [pending first sync]${_CDOT_NC}\n" "$project"
         else
-          printf "    ✔ %-28s  last: %s  size: %smb\n" \
+          printf "    ✔ %-28s  last: %s  size: %smb  [in sync]\n" \
             "$project" "${last_date:-?}" "$size_mb"
         fi
       else
