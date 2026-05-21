@@ -542,9 +542,9 @@ _cdot_push_history() {
   local tmp_index
   tmp_index=$(mktemp "$dir/.git/cdot-history-index.XXXXXX")
   trap "rm -f '$tmp_index'" RETURN
-  GIT_INDEX_FILE="$tmp_index" git -C "$dir" add "projects/$project_dir/" 2>/dev/null
+  GIT_INDEX_FILE="$tmp_index" git -C "$dir" add "projects/$project_dir/" 2>/dev/null || true
   local tree
-  tree=$(GIT_INDEX_FILE="$tmp_index" git -C "$dir" write-tree 2>/dev/null)
+  tree=$(GIT_INDEX_FILE="$tmp_index" git -C "$dir" write-tree 2>/dev/null || true)
   rm -f "$tmp_index"
   trap - RETURN
 
@@ -552,7 +552,7 @@ _cdot_push_history() {
 
   local parent_args=()
   local parent
-  parent=$(git -C "$dir" rev-parse --verify "refs/remotes/origin/$branch" 2>/dev/null)
+  parent=$(git -C "$dir" rev-parse --verify "refs/remotes/origin/$branch" 2>/dev/null || true)
   [[ -n "$parent" ]] && parent_args=(-p "$parent")
 
   # Skip if history hasn't changed since last push, but only if the remote
@@ -560,7 +560,7 @@ _cdot_push_history() {
   # must not suppress a fresh push.
   if [[ -n "$parent" ]]; then
     local parent_tree
-    parent_tree=$(git -C "$dir" rev-parse "${parent}^{tree}" 2>/dev/null)
+    parent_tree=$(git -C "$dir" rev-parse "${parent}^{tree}" 2>/dev/null || true)
     if [[ "$tree" == "$parent_tree" ]]; then
       git -C "$dir" ls-remote --heads origin "refs/heads/$branch" 2>/dev/null \
         | grep -q . && return 0
@@ -571,7 +571,7 @@ _cdot_push_history() {
 
   local commit
   commit=$(git -C "$dir" commit-tree "$tree" "${parent_args[@]}" \
-    -m "sync — $(_cdot_machine_id) — $(date -u +%Y-%m-%dT%H:%M:%SZ)" 2>/dev/null)
+    -m "sync — $(_cdot_machine_id) — $(date -u +%Y-%m-%dT%H:%M:%SZ)" 2>/dev/null || true)
 
   [[ -n "$commit" ]] || { echo "⚠  Failed to create history commit for '$name'."; return 1; }
 
