@@ -515,7 +515,7 @@ _cdot_push_history() {
   local tmp_index
   tmp_index=$(mktemp "$dir/.git/cdot-history-index.XXXXXX")
   trap "rm -f '$tmp_index'" RETURN
-  GIT_INDEX_FILE="$tmp_index" git -C "$dir" add "projects/$project_dir/" 2>/dev/null || true
+  GIT_INDEX_FILE="$tmp_index" git -C "$dir" add --force "projects/$project_dir/" 2>/dev/null || true
   local tree
   tree=$(GIT_INDEX_FILE="$tmp_index" git -C "$dir" write-tree 2>/dev/null || true)
   rm -f "$tmp_index"
@@ -678,7 +678,7 @@ _cdot_compact() {
   local tmp_index
   tmp_index=$(mktemp "$dir/.git/cdot-compact-index.XXXXXX")
   trap "rm -f '$tmp_index'" RETURN
-  GIT_INDEX_FILE="$tmp_index" git -C "$dir" add "projects/$project_dir/" 2>/dev/null
+  GIT_INDEX_FILE="$tmp_index" git -C "$dir" add --force "projects/$project_dir/" 2>/dev/null
   local tree
   tree=$(GIT_INDEX_FILE="$tmp_index" git -C "$dir" write-tree 2>/dev/null)
   rm -f "$tmp_index"
