@@ -828,7 +828,11 @@ _cdot_list() {
 
   echo "Fetching remote refs..."
   # --prune removes stale local tracking refs so _cdot_is_opted_in stays accurate
-  git -C "$dir" fetch --prune origin 2>/dev/null || true
+  local _fetch_err
+  if ! _fetch_err=$(git -C "$dir" fetch --prune origin 2>&1 >/dev/null); then
+    printf "  ⚠  Fetch failed — other machines may be missing from this view\n"
+    [[ -n "$_fetch_err" ]] && printf "     %s\n" "$_fetch_err"
+  fi
 
   local this_machine
   this_machine=$(_cdot_machine_id)
