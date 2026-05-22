@@ -18,6 +18,7 @@ _CDOT_YELLOW='\033[1;33m'; _CDOT_NC='\033[0m'
 # ---------------------------------------------------------
 
 _cdot_help() {
+    clear
     cat <<'EOF'
 cdot — Claude environment sync
 
@@ -426,6 +427,7 @@ _cdot_unlink() {
 
 _cdot_config() {
   local dir="$CDOT_CLAUDE_DIR"
+  clear
 
   if [[ ! -d "$dir/.git" ]] || ! git -C "$dir" remote get-url origin >/dev/null 2>&1; then
     printf "Enter remote URL: "
@@ -639,6 +641,7 @@ _cdot_delete() {
   local dir="$CDOT_CLAUDE_DIR"
   [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
   [[ -n "$name" ]] || { echo "Usage: cdot delete <project>"; return 1; }
+  clear
 
   echo "Fetching remote refs..."
   git -C "$dir" fetch origin 2>/dev/null || true
@@ -743,6 +746,7 @@ _cdot_prune() {
     echo "       add --all to operate on all projects on this machine"
     return 1
   fi
+  clear
 
   echo "Fetching remote refs..."
   git -C "$dir" fetch origin 2>/dev/null || true
@@ -825,6 +829,7 @@ _cdot_prune() {
 _cdot_list() {
   local dir="$CDOT_CLAUDE_DIR"
   [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
+  clear
 
   echo "Fetching remote refs..."
   # --prune removes stale local tracking refs so _cdot_is_opted_in stays accurate
@@ -976,6 +981,7 @@ _cdot_doctor_inline() {
 }
 
 _cdot_doctor() {
+  clear
   echo "== cdot doctor =="
   echo "Version: $_CDOT_VERSION"
 
@@ -1026,6 +1032,7 @@ cdot() {
     "")
       [[ -d "$CDOT_CLAUDE_DIR/.git" ]] \
         || { echo "Sync not initialized. Run: cdot config"; return 1; }
+      clear
       _cdot_pull
       _cdot_push
       _cdot_pull_history "$name"
