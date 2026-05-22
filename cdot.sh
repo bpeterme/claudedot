@@ -579,11 +579,11 @@ _cdot_add() {
 
   [[ -n "$commit" ]] || { echo "⚠  Failed to create initial commit."; return 1; }
 
-  if git -C "$dir" push origin "$commit:refs/heads/$branch" 2>&1; then
+  if git -C "$dir" push origin "$commit:refs/heads/$branch" >/dev/null 2>&1; then
     git -C "$dir" fetch origin \
       "refs/heads/$branch:refs/remotes/origin/$branch" >/dev/null 2>&1 || true
     echo "✔ Project '$name' opted into history sync on this machine."
-    echo "  History will be pushed on next cbox session."
+    _cdot_push_history "$name"
   else
     echo "⚠  Failed to opt '$name' into history sync."
     return 1
