@@ -546,12 +546,24 @@ _cdot_push_history() {
 
   [[ -n "$commit" ]] || { echo "⚠  Failed to create history commit for '$name'."; return 1; }
 
-  if git -C "$dir" push origin "$commit:refs/heads/$branch" >/dev/null 2>&1; then
+  local push_out
+  push_out=$(git -C "$dir" push origin "$commit:refs/heads/$branch" 2>&1)
+  local push_rc=$?
+  if [[ $push_rc -eq 0 ]]; then
     _cdot_size_check
     return 0
   else
+    printf '%s\n' "$push_out"
     echo "⚠  History push failed for '$name'."
-    echo "   Retry manually: git -C \"$dir\" push origin $commit:refs/heads/$branch"
+    if printf '%s\n' "$push_out" | grep -qE "not allowed|does not appear to be|Repository not found|Could not read from remote"; then
+      local remote_url
+      remote_url=$(git -C "$dir" remote get-url origin 2>/dev/null || echo "unknown")
+      echo "   Remote access error — the remote may have moved or been renamed."
+      echo "   Configured remote: $remote_url"
+      echo "   To reconfigure: cdot config <new-remote-url>"
+    else
+      echo "   Retry manually: git -C \"$dir\" push origin $commit:refs/heads/$branch"
+    fi
     return 1
   fi
 }
@@ -579,13 +591,23 @@ _cdot_add() {
 
   [[ -n "$commit" ]] || { echo "⚠  Failed to create initial commit."; return 1; }
 
-  if git -C "$dir" push origin "$commit:refs/heads/$branch" >/dev/null 2>&1; then
+  local push_out
+  push_out=$(git -C "$dir" push origin "$commit:refs/heads/$branch" 2>&1)
+  if [[ $? -eq 0 ]]; then
     git -C "$dir" fetch origin \
       "refs/heads/$branch:refs/remotes/origin/$branch" >/dev/null 2>&1 || true
     echo "✔ Project '$name' opted into history sync on this machine."
     _cdot_push_history "$name"
   else
+    printf '%s\n' "$push_out"
     echo "⚠  Failed to opt '$name' into history sync."
+    if printf '%s\n' "$push_out" | grep -qE "not allowed|does not appear to be|Repository not found|Could not read from remote"; then
+      local remote_url
+      remote_url=$(git -C "$dir" remote get-url origin 2>/dev/null || echo "unknown")
+      echo "   Remote access error — the remote may have moved or been renamed."
+      echo "   Configured remote: $remote_url"
+      echo "   To reconfigure: cdot config <new-remote-url>"
+    fi
     return 1
   fi
 }
