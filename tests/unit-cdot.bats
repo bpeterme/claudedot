@@ -343,12 +343,16 @@ setup() {
 
 @test "_cdot_add: reports failure and suggests reconfigure when remote is wrong" {
   CDOT_CLAUDE_DIR="$BATS_TMPDIR/add-push-fail"
+  rm -rf "$CDOT_CLAUDE_DIR"
   mkdir -p "$CDOT_CLAUDE_DIR/projects/-Workspace-myproject"
   git -C "$CDOT_CLAUDE_DIR" init 2>/dev/null
-  git -C "$CDOT_CLAUDE_DIR" remote add origin "git@gitlab.com:nobody/nonexistent.git"
+  git -C "$CDOT_CLAUDE_DIR" config user.email "test@test.com"
+  git -C "$CDOT_CLAUDE_DIR" config user.name "Test"
+  git -C "$CDOT_CLAUDE_DIR" remote add origin "/tmp/nonexistent-cdot-remote-$$"
   run _cdot_add "myproject"
   [ "$status" -ne 0 ]
   [[ "$output" == *"Failed to opt"* ]]
+  [[ "$output" == *"reconfigure"* ]]
 }
 
 # ---------------------------------------------------------------------------
