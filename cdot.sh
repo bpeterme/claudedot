@@ -18,12 +18,14 @@ _CDOT_YELLOW='\033[1;33m'; _CDOT_NC='\033[0m'
 # ---------------------------------------------------------
 
 _cdot_help() {
+    clear
     cat <<'EOF'
 cdot — Claude environment sync
 
 Usage:
-  cdot               Pull and push config + current project history
+  cdot               Sync config and current project history (bidirectional)
   cdot list          List projects with history sync and sizes
+  cdot read          Browse conversations from other machines (read-only, no download)
   cdot add           Opt current project into history sync
   cdot remove        Stop syncing current project
   cdot delete        Delete all sync history for a project across all machines
@@ -36,8 +38,8 @@ Maintenance:
   cdot version       Show version
 
 Companion tools:
-  cbox               claudebox — Claude Code container runtime
-  flux               flux — Large-file routing for your projects (git + R2 storage)
+  cbox help          claudebox — Claude Code container runtime
+  flux help          flux — Large-file routing for your projects (git + R2 storage)
 
 Help:
   cdot help
@@ -213,7 +215,7 @@ _cdot_push() {
   [[ -d "$dir/.git" ]] || return 0
   command -v git >/dev/null || return 0
 
-  # Bail if a rebase is in progress (unresolved pull conflict)
+  # Bail if a rebase is in progress (unresolved conflict from a prior sync)
   if [[ -d "$dir/.git/rebase-merge" || -d "$dir/.git/rebase-apply" ]]; then
     echo "⚠  Rebase in progress in $dir — resolve conflicts before syncing."
     return 1
@@ -228,22 +230,20 @@ _cdot_push() {
   _cdot_exclude_symlinks
   _cdot_exclude_gitlinks
 
-  # Nothing new to commit
-  git -C "$dir" diff --cached --quiet && return 0
+  # Commit local changes first so the working tree is clean before pulling
+  if ! git -C "$dir" diff --cached --quiet; then
+    git -C "$dir" commit -m "sync — $(_cdot_machine_id) — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fi
 
-  git -C "$dir" commit -m "sync — $(_cdot_machine_id) — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  # Pull remote changes onto a clean tree — local commit rebases on top if needed
+  if git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
+    git -C "$dir" pull --rebase 2>&1 \
+      || { echo "⚠  Sync conflict — resolve manually, then run 'cdot' again."; return 1; }
+    _cdot_exclude_symlinks
+  fi
 
   if git -C "$dir" push; then
     return 0
-  fi
-
-  # Only retry if an upstream tracking branch is configured (genuine rejection)
-  if git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
-    echo "Push rejected, rebasing..."
-    if git -C "$dir" pull --rebase && git -C "$dir" push; then
-      echo "✔ Synced (after rebase)"
-      return 0
-    fi
   fi
 
   echo "⚠  Sync push failed — changes saved locally."
@@ -255,7 +255,9 @@ _cdot_push() {
 # Overwritten if the old format (containing !projects/) is detected (migration).
 _cdot_write_gitignore() {
   local dir="$1"
-  if [[ -f "$dir/.gitignore" ]] && ! grep -q "^!projects/" "$dir/.gitignore" 2>/dev/null; then
+  if [[ -f "$dir/.gitignore" ]] \
+      && ! grep -q "^!projects/" "$dir/.gitignore" 2>/dev/null \
+      && grep -q "^!skills/" "$dir/.gitignore" 2>/dev/null; then
     return 0
   fi
   cat > "$dir/.gitignore" <<'EOF'
@@ -276,6 +278,16 @@ _cdot_write_gitignore() {
 # Plugin configuration
 !plugins/
 !plugins/**
+
+# User-defined extensions
+!skills/
+!skills/**
+!rules/
+!rules/**
+!agents/
+!agents/**
+!output-styles/
+!output-styles/**
 EOF
 }
 
@@ -426,6 +438,7 @@ _cdot_unlink() {
 
 _cdot_config() {
   local dir="$CDOT_CLAUDE_DIR"
+  clear
 
   if [[ ! -d "$dir/.git" ]] || ! git -C "$dir" remote get-url origin >/dev/null 2>&1; then
     printf "Enter remote URL: "
@@ -546,12 +559,24 @@ _cdot_push_history() {
 
   [[ -n "$commit" ]] || { echo "⚠  Failed to create history commit for '$name'."; return 1; }
 
-  if git -C "$dir" push origin "$commit:refs/heads/$branch" >/dev/null 2>&1; then
+  local push_out
+  push_out=$(git -C "$dir" push origin "$commit:refs/heads/$branch" 2>&1)
+  local push_rc=$?
+  if [[ $push_rc -eq 0 ]]; then
     _cdot_size_check
     return 0
   else
+    printf '%s\n' "$push_out"
     echo "⚠  History push failed for '$name'."
-    echo "   Retry manually: git -C \"$dir\" push origin $commit:refs/heads/$branch"
+    if printf '%s\n' "$push_out" | grep -qE "not allowed|does not appear to be|Repository not found|Could not read from remote"; then
+      local remote_url
+      remote_url=$(git -C "$dir" remote get-url origin 2>/dev/null || echo "unknown")
+      echo "   Remote access error — the remote may have moved or been renamed."
+      echo "   Configured remote: $remote_url"
+      echo "   To reconfigure: cdot config <new-remote-url>"
+    else
+      echo "   Retry manually: git -C \"$dir\" push origin $commit:refs/heads/$branch"
+    fi
     return 1
   fi
 }
@@ -579,13 +604,23 @@ _cdot_add() {
 
   [[ -n "$commit" ]] || { echo "⚠  Failed to create initial commit."; return 1; }
 
-  if git -C "$dir" push origin "$commit:refs/heads/$branch" >/dev/null 2>&1; then
+  local push_out
+  push_out=$(git -C "$dir" push origin "$commit:refs/heads/$branch" 2>&1)
+  if [[ $? -eq 0 ]]; then
     git -C "$dir" fetch origin \
       "refs/heads/$branch:refs/remotes/origin/$branch" >/dev/null 2>&1 || true
     echo "✔ Project '$name' opted into history sync on this machine."
     _cdot_push_history "$name"
   else
+    printf '%s\n' "$push_out"
     echo "⚠  Failed to opt '$name' into history sync."
+    if printf '%s\n' "$push_out" | grep -qE "not allowed|does not appear to be|Repository not found|Could not read from remote"; then
+      local remote_url
+      remote_url=$(git -C "$dir" remote get-url origin 2>/dev/null || echo "unknown")
+      echo "   Remote access error — the remote may have moved or been renamed."
+      echo "   Configured remote: $remote_url"
+      echo "   To reconfigure: cdot config <new-remote-url>"
+    fi
     return 1
   fi
 }
@@ -617,6 +652,7 @@ _cdot_delete() {
   local dir="$CDOT_CLAUDE_DIR"
   [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
   [[ -n "$name" ]] || { echo "Usage: cdot delete <project>"; return 1; }
+  clear
 
   echo "Fetching remote refs..."
   git -C "$dir" fetch origin 2>/dev/null || true
@@ -721,6 +757,7 @@ _cdot_prune() {
     echo "       add --all to operate on all projects on this machine"
     return 1
   fi
+  clear
 
   echo "Fetching remote refs..."
   git -C "$dir" fetch origin 2>/dev/null || true
@@ -800,37 +837,287 @@ _cdot_prune() {
   done
 }
 
-_cdot_list() {
+# ---------------------------------------------------------
+# read — browse another machine's conversations (no local download)
+# ---------------------------------------------------------
+
+_cdot_format_conversation() {
+  python3 -c '
+import sys, json
+
+BOLD  = "\033[1m"
+DIM   = "\033[2m"
+CYAN  = "\033[36m"
+GREEN = "\033[32m"
+RESET = "\033[0m"
+HR    = "\033[2m" + chr(0x2500) * 72 + "\033[0m"
+
+skip = ("local-command-caveat", "system-reminder", "command-name",
+        "command-message", "command-args")
+
+def extract(content):
+    if isinstance(content, str):
+        t = content.strip()
+        return None if (not t or any(m in t for m in skip)) else t
+    if isinstance(content, list):
+        parts = [b.get("text","").strip() for b in content
+                 if isinstance(b,dict) and b.get("type")=="text"
+                 and b.get("text","").strip()
+                 and not any(m in b.get("text","") for m in skip)]
+        return "\n".join(parts) or None
+    return None
+
+first = True
+for line in sys.stdin:
+    line = line.strip()
+    if not line: continue
+    try: d = json.loads(line)
+    except: continue
+
+    msg  = d.get("message", {})
+    role = msg.get("role") or d.get("role", "")
+    ts   = d.get("timestamp", "")[11:16]
+
+    if role not in ("user", "assistant"): continue
+
+    text = extract(msg.get("content", ""))
+    if not text: continue
+
+    if not first: print(HR)
+    first = False
+
+    label = BOLD + (CYAN + "YOU" if role == "user" else GREEN + "CLAUDE") + RESET
+    print(label + "  " + DIM + ts + RESET)
+    print()
+    print(text)
+    print()
+'
+}
+
+_cdot_read() {
   local dir="$CDOT_CLAUDE_DIR"
   [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
-
-  echo "Fetching remote refs..."
-  # --prune removes stale local tracking refs so _cdot_is_opted_in stays accurate
-  git -C "$dir" fetch --prune origin 2>/dev/null || true
+  command -v python3 >/dev/null || { echo "python3 is required for cdot read"; return 1; }
 
   local this_machine
   this_machine=$(_cdot_machine_id)
 
+  local machine="${1:-}"
+  local project_name="${2:-}"
+
+  # ── Step 1: pick machine + project ─────────────────────────────────────────
+  if [[ -z "$machine" || -z "$project_name" ]]; then
+    echo "Fetching remote refs..."
+    git -C "$dir" fetch origin 2>/dev/null || true
+
+    # Collect all history branches excluding current machine
+    local -a combo_machine=() combo_project=() combo_date=()
+    while IFS= read -r branch; do
+      [[ -z "$branch" ]] && continue
+      local m p
+      m="${branch##*/}"
+      p="${branch%/*}"
+      [[ "$m" == "$this_machine" ]] && continue
+      [[ -n "$machine" && "$m" != "$machine" ]] && continue
+      local last_date
+      last_date=$(git -C "$dir" log -1 --format="%ci" \
+        "refs/remotes/origin/history/$branch" 2>/dev/null | cut -d' ' -f1)
+      combo_machine+=("$m")
+      combo_project+=("$p")
+      combo_date+=("${last_date:-?}")
+    done < <(git -C "$dir" branch -r 2>/dev/null \
+      | grep "origin/history/" \
+      | sed 's|.*origin/history/||;s/[[:space:]]//g' \
+      | sort)
+
+    if [[ ${#combo_machine[@]} -eq 0 ]]; then
+      [[ -n "$machine" ]] \
+        && echo "No history found for machine '$machine'." \
+        || echo "No other machines have history synced."
+      return 0
+    fi
+
+    clear
+    printf "Remote conversations:\n\n"
+    printf "  %-3s  %-28s  %-22s  %s\n" "#" "Machine" "Project" "Last sync"
+    printf "  %s\n" "$(printf '%0.s─' {1..75})"
+    local i
+    for (( i=0; i<${#combo_machine[@]}; i++ )); do
+      printf "  %-3d  %-28s  %-22s  %s\n" \
+        "$(( i+1 ))" "${combo_machine[$i]}" "${combo_project[$i]}" "${combo_date[$i]}"
+    done
+
+    printf "\nSelect [1-%d] or q to quit: " "${#combo_machine[@]}"
+    local choice
+    IFS= read -r choice </dev/tty
+    [[ "$choice" == "q" || "$choice" == "Q" || -z "$choice" ]] && return 0
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#combo_machine[@]} )); then
+      echo "Invalid selection."
+      return 1
+    fi
+    machine="${combo_machine[$(( choice - 1 ))]}"
+    project_name="${combo_project[$(( choice - 1 ))]}"
+  fi
+
+  # ── Step 2: list conversations for machine + project ─────────────────────────
+  local branch="history/$project_name/$machine"
+  git -C "$dir" fetch origin "refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || true
+
+  if ! git -C "$dir" rev-parse --verify "refs/remotes/origin/$branch" >/dev/null 2>&1; then
+    echo "No history found for '$machine' / '$project_name'."
+    return 1
+  fi
+
+  local project_dir
+  project_dir=$(_cdot_project_dir "$project_name")
+
+  echo "Loading conversation list..."
+  local -a raw_entries=()
+  while IFS=$'\t' read -r size path <&3; do
+    local head_data ts preview
+    # "; :" drains the pipeline exit status — prevents SIGPIPE from killing
+    # the function when the user's shell has ERR_EXIT / pipefail set
+    head_data=$(git -C "$dir" show "refs/remotes/origin/$branch:$path" 2>/dev/null \
+      | head -c 3000; :)
+    ts=$(echo "$head_data" | grep -o '"timestamp":"[^"]*"' | head -1 \
+      | sed 's/"timestamp":"//;s/T.*//'; :)
+    preview=$(echo "$head_data" | python3 -c '
+import sys, json
+skip = ("local-command-caveat","system-reminder","command-name")
+for line in sys.stdin:
+    line = line.strip()
+    if not line: continue
+    try:
+        d = json.loads(line)
+        msg = d.get("message",{})
+        if msg.get("role") == "user":
+            c = msg.get("content","")
+            t = c if isinstance(c,str) else " ".join(
+                b.get("text","") for b in c
+                if isinstance(b,dict) and b.get("type")=="text")
+            t = t.strip().replace("\n"," ")
+            if t and not any(m in t for m in skip):
+                print(t[:65])
+                break
+    except: pass
+' 2>/dev/null; :)
+    raw_entries+=("${ts:-0000-00-00}|${size}|${path}|${preview:-?}")
+  done 3< <(git -C "$dir" ls-tree -l "refs/remotes/origin/$branch" \
+    -- "projects/$project_dir/" 2>/dev/null \
+    | awk '$2=="blob" && $NF ~ /\.jsonl$/ {print $4"\t"$NF}')
+
+  if [[ ${#raw_entries[@]} -eq 0 ]]; then
+    echo "No conversations found for '$project_name' on '$machine'."
+    return 0
+  fi
+
+  # Sort newest first (mapfile is bash-only; use a read loop for zsh compat)
+  local _sorted
+  _sorted=$(printf '%s\n' "${raw_entries[@]}" | sort -r; :)
+  raw_entries=()
+  while IFS= read -r _line; do
+    [[ -n "$_line" ]] && raw_entries+=("$_line")
+  done <<< "$_sorted"
+
+  clear
+  printf "Conversations on '%s' — '%s':\n\n" "$machine" "$project_name"
+  printf "  %-3s  %-10s  %-6s  %s\n" "#" "Date" "Size" "Preview"
+  printf "  %s\n" "$(printf '%0.s─' {1..80})"
+
+  local -a conv_paths=()
+  local j
+  for (( j=0; j<${#raw_entries[@]}; j++ )); do
+    local ts sz path preview
+    IFS='|' read -r ts sz path preview <<< "${raw_entries[$j]}"
+    local size_fmt
+    if (( sz > 1048576 )); then
+      size_fmt="$(( sz / 1048576 ))M"
+    elif (( sz > 1024 )); then
+      size_fmt="$(( sz / 1024 ))K"
+    else
+      size_fmt="${sz}B"
+    fi
+    printf "  %-3d  %-10s  %-6s  %s\n" "$(( j+1 ))" "$ts" "$size_fmt" "$preview"
+    conv_paths+=("$path")
+  done
+
+  printf "\nSelect [1-%d] or q to quit: " "${#conv_paths[@]}"
+  local choice
+  IFS= read -r choice </dev/tty
+  [[ "$choice" == "q" || "$choice" == "Q" || -z "$choice" ]] && return 0
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#conv_paths[@]} )); then
+    echo "Invalid selection."
+    return 1
+  fi
+
+  # ── Step 3: stream selected conversation through pager ──────────────────────
+  local selected="${conv_paths[$(( choice - 1 ))]}"
+  git -C "$dir" show "refs/remotes/origin/$branch:$selected" 2>/dev/null \
+    | _cdot_format_conversation \
+    | less -R
+}
+
+_cdot_branch_size_mb() {
+  local dir="$1" ref="$2"
+  git -C "$dir" ls-tree -r --long "$ref" 2>/dev/null \
+    | awk '{sum += $4} END {printf "%d", sum/1024/1024}'
+}
+
+_cdot_list() {
+  local dir="$CDOT_CLAUDE_DIR"
+  [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
+  clear
+
+  echo "Fetching remote refs..."
+  # --prune removes stale local tracking refs so _cdot_is_opted_in stays accurate
+  local _fetch_err
+  if ! _fetch_err=$(git -C "$dir" fetch --prune origin 2>&1 >/dev/null); then
+    printf "  ⚠  Fetch failed — other machines may be missing from this view\n"
+    [[ -n "$_fetch_err" ]] && printf "     %s\n" "$_fetch_err"
+  fi
+
+  local this_machine
+  this_machine=$(_cdot_machine_id)
+
+  # Column layout (used throughout):
+  #   col1: 2-char status (✔ /○ /· /  )
+  #   col2: project name, 28 chars left-padded
+  #   col3: last date, 10 chars (YYYY-MM-DD or ?)
+  #   col4: size, 4-char right-aligned number + " mb"
+  #   col5: status tag
+  local _FMT_OK _FMT_PEND _FMT_NOT_IN _FMT_OTHER
+  _FMT_OK="    ✔  %-28s  last: %-10s  size: %4s mb  [in sync]\n"
+  _FMT_PEND="${_CDOT_YELLOW}    ○  %-28s  [pending first sync]${_CDOT_NC}\n"
+  _FMT_NOT_IN="    ·  %-28s  [not opted in — use: cdot add]\n"
+  _FMT_OTHER="       %-28s  last: %-10s  size: %4s mb\n"
 
   # ── config (main branch) ─────────────────────────────────────────────────────
   local main_remote
   main_remote=$(git -C "$dir" remote get-url origin 2>/dev/null || echo "none")
-  printf "\n  configuration files\n"
+  local config_size_mb config_last_date
+  config_size_mb=$(_cdot_branch_size_mb "$dir" HEAD)
+  config_last_date=$(git -C "$dir" log -1 --format="%ci" HEAD 2>/dev/null | cut -d' ' -f1)
+  printf "\n  configuration files  (%s)\n" "$main_remote"
   if git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
     local ahead behind
     ahead=$(git -C "$dir" rev-list --count @{u}..HEAD 2>/dev/null || echo "0")
     behind=$(git -C "$dir" rev-list --count HEAD..@{u} 2>/dev/null || echo "0")
     if [[ "$ahead" == "0" && "$behind" == "0" ]]; then
-      printf "    ✔ %s  [in sync]\n" "$main_remote"
+      # shellcheck disable=SC2059
+      printf "$_FMT_OK" "config" "${config_last_date:-?}" "$config_size_mb"
     elif [[ "$ahead" != "0" && "$behind" == "0" ]]; then
-      printf "${_CDOT_YELLOW}    ○ %s  [unpushed]${_CDOT_NC}\n" "$main_remote"
+      printf "${_CDOT_YELLOW}    ○  %-28s  last: %-10s  size: %4s mb  [unpushed]${_CDOT_NC}\n" \
+        "config" "${config_last_date:-?}" "$config_size_mb"
     elif [[ "$ahead" == "0" ]]; then
-      printf "${_CDOT_YELLOW}    ○ %s  [behind]${_CDOT_NC}\n" "$main_remote"
+      printf "${_CDOT_YELLOW}    ○  %-28s  last: %-10s  size: %4s mb  [behind]${_CDOT_NC}\n" \
+        "config" "${config_last_date:-?}" "$config_size_mb"
     else
-      printf "${_CDOT_YELLOW}    ○ %s  [diverged]${_CDOT_NC}\n" "$main_remote"
+      printf "${_CDOT_YELLOW}    ○  %-28s  last: %-10s  size: %4s mb  [diverged]${_CDOT_NC}\n" \
+        "config" "${config_last_date:-?}" "$config_size_mb"
     fi
   else
-    printf "    ○ %s  [no upstream]\n" "$main_remote"
+    printf "    ○  %-28s  last: %-10s  size: %4s mb  [no upstream]\n" \
+      "config" "${config_last_date:-?}" "$config_size_mb"
   fi
 
   # ── history branches — read from local tracking refs (post-prune = remote) ──
@@ -844,11 +1131,14 @@ _cdot_list() {
     return 0
   fi
 
-  # All unique project names across all machines
-  local all_projects
-  all_projects=$(echo "$all_branches" \
-    | sed 's|history/\([^/]*\)/.*|\1|' \
-    | sort -u)
+  # All unique project names: from remote branches + local projects/ dirs
+  local all_projects remote_projects local_projects
+  remote_projects=$(echo "$all_branches" \
+    | sed 's|history/\([^/]*\)/.*|\1|')
+  local_projects=$(ls "$dir/projects/" 2>/dev/null \
+    | grep "^-Workspace-" \
+    | sed 's/^-Workspace-//')
+  all_projects=$(printf "%s\n%s" "$remote_projects" "$local_projects" | sort -u)
 
   # Projects opted in on this machine
   local this_machine_projects
@@ -890,20 +1180,27 @@ _cdot_list() {
       last_date=$(git -C "$dir" log -1 --format="%ci" \
         "refs/remotes/origin/$branch" 2>/dev/null | cut -d' ' -f1)
 
-      local project_dir size_mb="?"
+      local project_dir size_mb
       project_dir=$(_cdot_project_dir "$project")
-      [[ -d "$dir/projects/$project_dir" ]] && \
-        size_mb=$(du -sm "$dir/projects/$project_dir" 2>/dev/null | awk '{print $1}')
+      if [[ "$machine" == "$this_machine" ]]; then
+        size_mb="?"
+        [[ -d "$dir/projects/$project_dir" ]] && \
+          size_mb=$(du -sm "$dir/projects/$project_dir" 2>/dev/null | awk '{print $1}')
+      else
+        size_mb=$(_cdot_branch_size_mb "$dir" "refs/remotes/origin/$branch")
+      fi
 
       if [[ "$machine" == "$this_machine" ]]; then
         if [[ "$last_msg" == "add — "* ]]; then
-          printf "${_CDOT_YELLOW}    ○ %-28s  [pending first sync]${_CDOT_NC}\n" "$project"
+          # shellcheck disable=SC2059
+          printf "$_FMT_PEND" "$project"
         else
-          printf "    ✔ %-28s  last: %s  size: %smb  [in sync]\n" \
-            "$project" "${last_date:-?}" "$size_mb"
+          # shellcheck disable=SC2059
+          printf "$_FMT_OK" "$project" "${last_date:-?}" "$size_mb"
         fi
       else
-        printf "      %-28s  last: %s\n" "$project" "${last_date:-?}"
+        # shellcheck disable=SC2059
+        printf "$_FMT_OTHER" "$project" "${last_date:-?}" "$size_mb"
       fi
     done < <(echo "$all_branches" | grep "history/[^/]*/$machine$")
 
@@ -912,7 +1209,8 @@ _cdot_list() {
       while IFS= read -r project; do
         [[ -z "$project" ]] && continue
         echo "$this_machine_projects" | grep -qx "$project" && continue
-        printf "    · %-28s  [not opted in — use: cdot add]\n" "$project"
+        # shellcheck disable=SC2059
+        printf "$_FMT_NOT_IN" "$project"
       done <<< "$all_projects"
     fi
   done <<< "$machines"
@@ -950,6 +1248,7 @@ _cdot_doctor_inline() {
 }
 
 _cdot_doctor() {
+  clear
   echo "== cdot doctor =="
   echo "Version: $_CDOT_VERSION"
 
@@ -1000,13 +1299,14 @@ cdot() {
     "")
       [[ -d "$CDOT_CLAUDE_DIR/.git" ]] \
         || { echo "Sync not initialized. Run: cdot config"; return 1; }
-      _cdot_pull
+      clear
       _cdot_push
       _cdot_pull_history "$name"
       _cdot_push_history "$name"
       ;;
 
     config)   _cdot_config ;;
+    read)     _cdot_read "${2:-}" "${3:-}" ;;
     add)      _cdot_add "$name" ;;
     remove)   _cdot_remove "${2:-$name}" ;;
     delete)   _cdot_delete "${2:-}" ;;
