@@ -975,10 +975,12 @@ _cdot_read() {
   local -a raw_entries=()
   while IFS=$'\t' read -r size path <&3; do
     local head_data ts preview
+    # "; :" drains the pipeline exit status — prevents SIGPIPE from killing
+    # the function when the user's shell has ERR_EXIT / pipefail set
     head_data=$(git -C "$dir" show "refs/remotes/origin/$branch:$path" 2>/dev/null \
-      | head -c 3000)
+      | head -c 3000; :)
     ts=$(echo "$head_data" | grep -o '"timestamp":"[^"]*"' | head -1 \
-      | sed 's/"timestamp":"//;s/T.*//')
+      | sed 's/"timestamp":"//;s/T.*//'; :)
     preview=$(echo "$head_data" | python3 -c '
 import sys, json
 skip = ("local-command-caveat","system-reminder","command-name")
@@ -998,7 +1000,7 @@ for line in sys.stdin:
                 print(t[:65])
                 break
     except: pass
-' 2>/dev/null)
+' 2>/dev/null; :)
     raw_entries+=("${ts:-0000-00-00}|${size}|${path}|${preview:-?}")
   done 3< <(git -C "$dir" ls-tree -l "refs/remotes/origin/$branch" \
     -- "projects/$project_dir/" 2>/dev/null \
@@ -1011,7 +1013,7 @@ for line in sys.stdin:
 
   # Sort newest first (mapfile is bash-only; use a read loop for zsh compat)
   local _sorted
-  _sorted=$(printf '%s\n' "${raw_entries[@]}" | sort -r)
+  _sorted=$(printf '%s\n' "${raw_entries[@]}" | sort -r; :)
   raw_entries=()
   while IFS= read -r _line; do
     [[ -n "$_line" ]] && raw_entries+=("$_line")
