@@ -1113,11 +1113,14 @@ _cdot_list() {
     return 0
   fi
 
-  # All unique project names across all machines
-  local all_projects
-  all_projects=$(echo "$all_branches" \
-    | sed 's|history/\([^/]*\)/.*|\1|' \
-    | sort -u)
+  # All unique project names: from remote branches + local projects/ dirs
+  local all_projects remote_projects local_projects
+  remote_projects=$(echo "$all_branches" \
+    | sed 's|history/\([^/]*\)/.*|\1|')
+  local_projects=$(ls "$dir/projects/" 2>/dev/null \
+    | grep "^-Workspace-" \
+    | sed 's/^-Workspace-//')
+  all_projects=$(printf "%s\n%s" "$remote_projects" "$local_projects" | sort -u)
 
   # Projects opted in on this machine
   local this_machine_projects
