@@ -256,7 +256,9 @@ _cdot_push() {
 # Overwritten if the old format (containing !projects/) is detected (migration).
 _cdot_write_gitignore() {
   local dir="$1"
-  if [[ -f "$dir/.gitignore" ]] && ! grep -q "^!projects/" "$dir/.gitignore" 2>/dev/null; then
+  if [[ -f "$dir/.gitignore" ]] \
+      && ! grep -q "^!projects/" "$dir/.gitignore" 2>/dev/null \
+      && grep -q "^!skills/" "$dir/.gitignore" 2>/dev/null; then
     return 0
   fi
   cat > "$dir/.gitignore" <<'EOF'
@@ -277,6 +279,16 @@ _cdot_write_gitignore() {
 # Plugin configuration
 !plugins/
 !plugins/**
+
+# User-defined extensions
+!skills/
+!skills/**
+!rules/
+!rules/**
+!agents/
+!agents/**
+!output-styles/
+!output-styles/**
 EOF
 }
 

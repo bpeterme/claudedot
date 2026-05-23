@@ -137,10 +137,10 @@ setup() {
 @test "_cdot_write_gitignore: skips write when already correct" {
   local dir="$BATS_TMPDIR/gitignore-skip"
   mkdir -p "$dir"
-  echo "correct" > "$dir/.gitignore"
+  printf '*\n!settings.json\n!skills/\n!skills/**\nsentinel\n' > "$dir/.gitignore"
   _cdot_write_gitignore "$dir"
-  run cat "$dir/.gitignore"
-  [ "$output" = "correct" ]
+  run grep "sentinel" "$dir/.gitignore"
+  [ "$status" -eq 0 ]
 }
 
 @test "_cdot_write_gitignore: overwrites old format containing !projects/" {
