@@ -38,8 +38,8 @@ Maintenance:
   cdot version       Show version
 
 Companion tools:
-  cbox               claudebox — Claude Code container runtime
-  flux               flux — Large-file routing for your projects (git + R2 storage)
+  cbox help          claudebox — Claude Code container runtime
+  flux help          flux — Large-file routing for your projects (git + R2 storage)
 
 Help:
   cdot help
