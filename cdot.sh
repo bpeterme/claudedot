@@ -23,7 +23,7 @@ _cdot_help() {
 cdot — Claude environment sync
 
 Usage:
-  cdot               Pull and push config + current project history
+  cdot               Sync config and current project history (bidirectional)
   cdot list          List projects with history sync and sizes
   cdot add           Opt current project into history sync
   cdot remove        Stop syncing current project
@@ -214,7 +214,7 @@ _cdot_push() {
   [[ -d "$dir/.git" ]] || return 0
   command -v git >/dev/null || return 0
 
-  # Bail if a rebase is in progress (unresolved pull conflict)
+  # Bail if a rebase is in progress (unresolved conflict from a prior sync)
   if [[ -d "$dir/.git/rebase-merge" || -d "$dir/.git/rebase-apply" ]]; then
     echo "⚠  Rebase in progress in $dir — resolve conflicts before syncing."
     return 1
@@ -229,22 +229,20 @@ _cdot_push() {
   _cdot_exclude_symlinks
   _cdot_exclude_gitlinks
 
-  # Nothing new to commit
-  git -C "$dir" diff --cached --quiet && return 0
+  # Commit local changes first so the working tree is clean before pulling
+  if ! git -C "$dir" diff --cached --quiet; then
+    git -C "$dir" commit -m "sync — $(_cdot_machine_id) — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fi
 
-  git -C "$dir" commit -m "sync — $(_cdot_machine_id) — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  # Pull remote changes onto a clean tree — local commit rebases on top if needed
+  if git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
+    git -C "$dir" pull --rebase 2>&1 \
+      || { echo "⚠  Sync conflict — resolve manually, then run 'cdot' again."; return 1; }
+    _cdot_exclude_symlinks
+  fi
 
   if git -C "$dir" push; then
     return 0
-  fi
-
-  # Only retry if an upstream tracking branch is configured (genuine rejection)
-  if git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
-    echo "Push rejected, rebasing..."
-    if git -C "$dir" pull --rebase && git -C "$dir" push; then
-      echo "✔ Synced (after rebase)"
-      return 0
-    fi
   fi
 
   echo "⚠  Sync push failed — changes saved locally."
@@ -1045,7 +1043,6 @@ cdot() {
       [[ -d "$CDOT_CLAUDE_DIR/.git" ]] \
         || { echo "Sync not initialized. Run: cdot config"; return 1; }
       clear
-      _cdot_pull
       _cdot_push
       _cdot_pull_history "$name"
       _cdot_push_history "$name"
