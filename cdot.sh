@@ -1039,6 +1039,12 @@ for line in sys.stdin:
     | less -R
 }
 
+_cdot_branch_size_mb() {
+  local dir="$1" ref="$2"
+  git -C "$dir" ls-tree -r --long "$ref" 2>/dev/null \
+    | awk '{sum += $4} END {printf "%d", sum/1024/1024}'
+}
+
 _cdot_list() {
   local dir="$CDOT_CLAUDE_DIR"
   [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
@@ -1055,26 +1061,45 @@ _cdot_list() {
   local this_machine
   this_machine=$(_cdot_machine_id)
 
+  # Column layout (used throughout):
+  #   col1: 2-char status (✔ /○ /· /  )
+  #   col2: project name, 28 chars left-padded
+  #   col3: last date, 10 chars (YYYY-MM-DD or ?)
+  #   col4: size, 4-char right-aligned number + " mb"
+  #   col5: status tag
+  local _FMT_OK _FMT_PEND _FMT_NOT_IN _FMT_OTHER
+  _FMT_OK="    ✔  %-28s  last: %-10s  size: %4s mb  [in sync]\n"
+  _FMT_PEND="${_CDOT_YELLOW}    ○  %-28s  [pending first sync]${_CDOT_NC}\n"
+  _FMT_NOT_IN="    ·  %-28s  [not opted in — use: cdot add]\n"
+  _FMT_OTHER="       %-28s  last: %-10s  size: %4s mb\n"
 
   # ── config (main branch) ─────────────────────────────────────────────────────
   local main_remote
   main_remote=$(git -C "$dir" remote get-url origin 2>/dev/null || echo "none")
-  printf "\n  configuration files\n"
+  local config_size_mb config_last_date
+  config_size_mb=$(_cdot_branch_size_mb "$dir" HEAD)
+  config_last_date=$(git -C "$dir" log -1 --format="%ci" HEAD 2>/dev/null | cut -d' ' -f1)
+  printf "\n  configuration files  (%s)\n" "$main_remote"
   if git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
     local ahead behind
     ahead=$(git -C "$dir" rev-list --count @{u}..HEAD 2>/dev/null || echo "0")
     behind=$(git -C "$dir" rev-list --count HEAD..@{u} 2>/dev/null || echo "0")
     if [[ "$ahead" == "0" && "$behind" == "0" ]]; then
-      printf "    ✔ %s  [in sync]\n" "$main_remote"
+      # shellcheck disable=SC2059
+      printf "$_FMT_OK" "config" "${config_last_date:-?}" "$config_size_mb"
     elif [[ "$ahead" != "0" && "$behind" == "0" ]]; then
-      printf "${_CDOT_YELLOW}    ○ %s  [unpushed]${_CDOT_NC}\n" "$main_remote"
+      printf "${_CDOT_YELLOW}    ○  %-28s  last: %-10s  size: %4s mb  [unpushed]${_CDOT_NC}\n" \
+        "config" "${config_last_date:-?}" "$config_size_mb"
     elif [[ "$ahead" == "0" ]]; then
-      printf "${_CDOT_YELLOW}    ○ %s  [behind]${_CDOT_NC}\n" "$main_remote"
+      printf "${_CDOT_YELLOW}    ○  %-28s  last: %-10s  size: %4s mb  [behind]${_CDOT_NC}\n" \
+        "config" "${config_last_date:-?}" "$config_size_mb"
     else
-      printf "${_CDOT_YELLOW}    ○ %s  [diverged]${_CDOT_NC}\n" "$main_remote"
+      printf "${_CDOT_YELLOW}    ○  %-28s  last: %-10s  size: %4s mb  [diverged]${_CDOT_NC}\n" \
+        "config" "${config_last_date:-?}" "$config_size_mb"
     fi
   else
-    printf "    ○ %s  [no upstream]\n" "$main_remote"
+    printf "    ○  %-28s  last: %-10s  size: %4s mb  [no upstream]\n" \
+      "config" "${config_last_date:-?}" "$config_size_mb"
   fi
 
   # ── history branches — read from local tracking refs (post-prune = remote) ──
@@ -1134,20 +1159,27 @@ _cdot_list() {
       last_date=$(git -C "$dir" log -1 --format="%ci" \
         "refs/remotes/origin/$branch" 2>/dev/null | cut -d' ' -f1)
 
-      local project_dir size_mb="?"
+      local project_dir size_mb
       project_dir=$(_cdot_project_dir "$project")
-      [[ -d "$dir/projects/$project_dir" ]] && \
-        size_mb=$(du -sm "$dir/projects/$project_dir" 2>/dev/null | awk '{print $1}')
+      if [[ "$machine" == "$this_machine" ]]; then
+        size_mb="?"
+        [[ -d "$dir/projects/$project_dir" ]] && \
+          size_mb=$(du -sm "$dir/projects/$project_dir" 2>/dev/null | awk '{print $1}')
+      else
+        size_mb=$(_cdot_branch_size_mb "$dir" "refs/remotes/origin/$branch")
+      fi
 
       if [[ "$machine" == "$this_machine" ]]; then
         if [[ "$last_msg" == "add — "* ]]; then
-          printf "${_CDOT_YELLOW}    ○ %-28s  [pending first sync]${_CDOT_NC}\n" "$project"
+          # shellcheck disable=SC2059
+          printf "$_FMT_PEND" "$project"
         else
-          printf "    ✔ %-28s  last: %s  size: %smb  [in sync]\n" \
-            "$project" "${last_date:-?}" "$size_mb"
+          # shellcheck disable=SC2059
+          printf "$_FMT_OK" "$project" "${last_date:-?}" "$size_mb"
         fi
       else
-        printf "      %-28s  last: %s\n" "$project" "${last_date:-?}"
+        # shellcheck disable=SC2059
+        printf "$_FMT_OTHER" "$project" "${last_date:-?}" "$size_mb"
       fi
     done < <(echo "$all_branches" | grep "history/[^/]*/$machine$")
 
@@ -1156,7 +1188,8 @@ _cdot_list() {
       while IFS= read -r project; do
         [[ -z "$project" ]] && continue
         echo "$this_machine_projects" | grep -qx "$project" && continue
-        printf "    · %-28s  [not opted in — use: cdot add]\n" "$project"
+        # shellcheck disable=SC2059
+        printf "$_FMT_NOT_IN" "$project"
       done <<< "$all_projects"
     fi
   done <<< "$machines"
