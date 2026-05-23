@@ -25,7 +25,7 @@ cdot — Claude environment sync
 Usage:
   cdot               Sync config and current project history (bidirectional)
   cdot list          List projects with history sync and sizes
-  cdot read          Browse another machine's conversations (read-only, no download)
+  cdot read          Browse conversations from other machines (read-only, no download)
   cdot add           Opt current project into history sync
   cdot remove        Stop syncing current project
   cdot delete        Delete all sync history for a project across all machines
@@ -899,66 +899,77 @@ _cdot_read() {
   [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
   command -v python3 >/dev/null || { echo "python3 is required for cdot read"; return 1; }
 
-  local name this_machine
-  name=$(_cdot_name)
+  local this_machine
   this_machine=$(_cdot_machine_id)
 
   local machine="${1:-}"
+  local project_name="${2:-}"
 
-  # ── Step 1: pick machine ────────────────────────────────────────────────────
-  if [[ -z "$machine" ]]; then
+  # ── Step 1: pick machine + project ─────────────────────────────────────────
+  if [[ -z "$machine" || -z "$project_name" ]]; then
     echo "Fetching remote refs..."
     git -C "$dir" fetch origin 2>/dev/null || true
 
-    local machines
-    machines=$(git -C "$dir" branch -r 2>/dev/null \
-      | grep "origin/history/$name/" \
-      | sed "s|.*origin/history/$name/||;s/[[:space:]]//g" \
-      | grep -v "^${this_machine}$" \
+    # Collect all history branches excluding current machine
+    local -a combo_machine=() combo_project=() combo_date=()
+    while IFS= read -r branch; do
+      [[ -z "$branch" ]] && continue
+      local m p
+      m="${branch##*/}"
+      p="${branch%/*}"
+      [[ "$m" == "$this_machine" ]] && continue
+      [[ -n "$machine" && "$m" != "$machine" ]] && continue
+      local last_date
+      last_date=$(git -C "$dir" log -1 --format="%ci" \
+        "refs/remotes/origin/history/$branch" 2>/dev/null | cut -d' ' -f1)
+      combo_machine+=("$m")
+      combo_project+=("$p")
+      combo_date+=("${last_date:-?}")
+    done < <(git -C "$dir" branch -r 2>/dev/null \
+      | grep "origin/history/" \
+      | sed 's|.*origin/history/||;s/[[:space:]]//g' \
       | sort)
 
-    if [[ -z "$machines" ]]; then
-      echo "No other machines have history for '$name'."
+    if [[ ${#combo_machine[@]} -eq 0 ]]; then
+      [[ -n "$machine" ]] \
+        && echo "No history found for machine '$machine'." \
+        || echo "No other machines have history synced."
       return 0
     fi
 
     clear
-    printf "Machines with history for '%s':\n\n" "$name"
+    printf "Remote conversations:\n\n"
+    printf "  %-3s  %-28s  %-22s  %s\n" "#" "Machine" "Project" "Last sync"
+    printf "  %s\n" "$(printf '%0.s─' {1..75})"
+    local i
+    for (( i=0; i<${#combo_machine[@]}; i++ )); do
+      printf "  %-3d  %-28s  %-22s  %s\n" \
+        "$(( i+1 ))" "${combo_machine[$i]}" "${combo_project[$i]}" "${combo_date[$i]}"
+    done
 
-    local -a machine_arr=()
-    local i=1
-    while IFS= read -r m; do
-      [[ -z "$m" ]] && continue
-      local last_date
-      last_date=$(git -C "$dir" log -1 --format="%ci" \
-        "refs/remotes/origin/history/$name/$m" 2>/dev/null | cut -d' ' -f1)
-      printf "  %2d  %-30s  last: %s\n" "$i" "$m" "${last_date:-?}"
-      machine_arr+=("$m")
-      (( i++ ))
-    done <<< "$machines"
-
-    printf "\nSelect [1-%d] or q to quit: " "${#machine_arr[@]}"
+    printf "\nSelect [1-%d] or q to quit: " "${#combo_machine[@]}"
     local choice
     IFS= read -r choice || return 0
     [[ "$choice" == "q" || "$choice" == "Q" || -z "$choice" ]] && return 0
-    if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#machine_arr[@]} )); then
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#combo_machine[@]} )); then
       echo "Invalid selection."
       return 1
     fi
-    machine="${machine_arr[$(( choice - 1 ))]}"
+    machine="${combo_machine[$(( choice - 1 ))]}"
+    project_name="${combo_project[$(( choice - 1 ))]}"
   fi
 
-  # ── Step 2: list conversations for that machine ─────────────────────────────
-  local branch="history/$name/$machine"
+  # ── Step 2: list conversations for machine + project ─────────────────────────
+  local branch="history/$project_name/$machine"
   git -C "$dir" fetch origin "refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || true
 
   if ! git -C "$dir" rev-parse --verify "refs/remotes/origin/$branch" >/dev/null 2>&1; then
-    echo "No history found for machine '$machine' on project '$name'."
+    echo "No history found for '$machine' / '$project_name'."
     return 1
   fi
 
   local project_dir
-  project_dir=$(_cdot_project_dir "$name")
+  project_dir=$(_cdot_project_dir "$project_name")
 
   echo "Loading conversation list..."
   local -a raw_entries=()
@@ -994,7 +1005,7 @@ for line in sys.stdin:
     | awk '$2=="blob" && $NF ~ /\.jsonl$/ {print $4"\t"$NF}')
 
   if [[ ${#raw_entries[@]} -eq 0 ]]; then
-    echo "No conversations found for '$name' on '$machine'."
+    echo "No conversations found for '$project_name' on '$machine'."
     return 0
   fi
 
@@ -1002,7 +1013,7 @@ for line in sys.stdin:
   mapfile -t raw_entries < <(printf '%s\n' "${raw_entries[@]}" | sort -r)
 
   clear
-  printf "Conversations on '%s' — '%s':\n\n" "$machine" "$name"
+  printf "Conversations on '%s' — '%s':\n\n" "$machine" "$project_name"
   printf "  %-3s  %-10s  %-6s  %s\n" "#" "Date" "Size" "Preview"
   printf "  %s\n" "$(printf '%0.s─' {1..80})"
 
@@ -1288,7 +1299,7 @@ cdot() {
       ;;
 
     config)   _cdot_config ;;
-    read)     _cdot_read "${2:-}" ;;
+    read)     _cdot_read "${2:-}" "${3:-}" ;;
     add)      _cdot_add "$name" ;;
     remove)   _cdot_remove "${2:-$name}" ;;
     delete)   _cdot_delete "${2:-}" ;;
