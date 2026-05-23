@@ -25,6 +25,7 @@ cdot — Claude environment sync
 Usage:
   cdot               Sync config and current project history (bidirectional)
   cdot list          List projects with history sync and sizes
+  cdot read          Browse another machine's conversations (read-only, no download)
   cdot add           Opt current project into history sync
   cdot remove        Stop syncing current project
   cdot delete        Delete all sync history for a project across all machines
@@ -836,6 +837,208 @@ _cdot_prune() {
   done
 }
 
+# ---------------------------------------------------------
+# read — browse another machine's conversations (no local download)
+# ---------------------------------------------------------
+
+_cdot_format_conversation() {
+  python3 -c '
+import sys, json
+
+BOLD  = "\033[1m"
+DIM   = "\033[2m"
+CYAN  = "\033[36m"
+GREEN = "\033[32m"
+RESET = "\033[0m"
+HR    = "\033[2m" + chr(0x2500) * 72 + "\033[0m"
+
+skip = ("local-command-caveat", "system-reminder", "command-name",
+        "command-message", "command-args")
+
+def extract(content):
+    if isinstance(content, str):
+        t = content.strip()
+        return None if (not t or any(m in t for m in skip)) else t
+    if isinstance(content, list):
+        parts = [b.get("text","").strip() for b in content
+                 if isinstance(b,dict) and b.get("type")=="text"
+                 and b.get("text","").strip()
+                 and not any(m in b.get("text","") for m in skip)]
+        return "\n".join(parts) or None
+    return None
+
+first = True
+for line in sys.stdin:
+    line = line.strip()
+    if not line: continue
+    try: d = json.loads(line)
+    except: continue
+
+    msg  = d.get("message", {})
+    role = msg.get("role") or d.get("role", "")
+    ts   = d.get("timestamp", "")[11:16]
+
+    if role not in ("user", "assistant"): continue
+
+    text = extract(msg.get("content", ""))
+    if not text: continue
+
+    if not first: print(HR)
+    first = False
+
+    label = BOLD + (CYAN + "YOU" if role == "user" else GREEN + "CLAUDE") + RESET
+    print(label + "  " + DIM + ts + RESET)
+    print()
+    print(text)
+    print()
+'
+}
+
+_cdot_read() {
+  local dir="$CDOT_CLAUDE_DIR"
+  [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
+  command -v python3 >/dev/null || { echo "python3 is required for cdot read"; return 1; }
+
+  local name this_machine
+  name=$(_cdot_name)
+  this_machine=$(_cdot_machine_id)
+
+  local machine="${1:-}"
+
+  # ── Step 1: pick machine ────────────────────────────────────────────────────
+  if [[ -z "$machine" ]]; then
+    echo "Fetching remote refs..."
+    git -C "$dir" fetch origin 2>/dev/null || true
+
+    local machines
+    machines=$(git -C "$dir" branch -r 2>/dev/null \
+      | grep "origin/history/$name/" \
+      | sed "s|.*origin/history/$name/||;s/[[:space:]]//g" \
+      | grep -v "^${this_machine}$" \
+      | sort)
+
+    if [[ -z "$machines" ]]; then
+      echo "No other machines have history for '$name'."
+      return 0
+    fi
+
+    clear
+    printf "Machines with history for '%s':\n\n" "$name"
+
+    local -a machine_arr=()
+    local i=1
+    while IFS= read -r m; do
+      [[ -z "$m" ]] && continue
+      local last_date
+      last_date=$(git -C "$dir" log -1 --format="%ci" \
+        "refs/remotes/origin/history/$name/$m" 2>/dev/null | cut -d' ' -f1)
+      printf "  %2d  %-30s  last: %s\n" "$i" "$m" "${last_date:-?}"
+      machine_arr+=("$m")
+      (( i++ ))
+    done <<< "$machines"
+
+    printf "\nSelect [1-%d] or q to quit: " "${#machine_arr[@]}"
+    local choice
+    IFS= read -r choice || return 0
+    [[ "$choice" == "q" || "$choice" == "Q" || -z "$choice" ]] && return 0
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#machine_arr[@]} )); then
+      echo "Invalid selection."
+      return 1
+    fi
+    machine="${machine_arr[$(( choice - 1 ))]}"
+  fi
+
+  # ── Step 2: list conversations for that machine ─────────────────────────────
+  local branch="history/$name/$machine"
+  git -C "$dir" fetch origin "refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || true
+
+  if ! git -C "$dir" rev-parse --verify "refs/remotes/origin/$branch" >/dev/null 2>&1; then
+    echo "No history found for machine '$machine' on project '$name'."
+    return 1
+  fi
+
+  local project_dir
+  project_dir=$(_cdot_project_dir "$name")
+
+  echo "Loading conversation list..."
+  local -a raw_entries=()
+  while IFS=$'\t' read -r size path; do
+    local head_data ts preview
+    head_data=$(git -C "$dir" show "refs/remotes/origin/$branch:$path" 2>/dev/null \
+      | head -c 3000)
+    ts=$(echo "$head_data" | grep -o '"timestamp":"[^"]*"' | head -1 \
+      | sed 's/"timestamp":"//;s/T.*//')
+    preview=$(echo "$head_data" | python3 -c '
+import sys, json
+skip = ("local-command-caveat","system-reminder","command-name")
+for line in sys.stdin:
+    line = line.strip()
+    if not line: continue
+    try:
+        d = json.loads(line)
+        msg = d.get("message",{})
+        if msg.get("role") == "user":
+            c = msg.get("content","")
+            t = c if isinstance(c,str) else " ".join(
+                b.get("text","") for b in c
+                if isinstance(b,dict) and b.get("type")=="text")
+            t = t.strip().replace("\n"," ")
+            if t and not any(m in t for m in skip):
+                print(t[:65])
+                break
+    except: pass
+' 2>/dev/null)
+    raw_entries+=("${ts:-0000-00-00}|${size}|${path}|${preview:-?}")
+  done < <(git -C "$dir" ls-tree -l "refs/remotes/origin/$branch" \
+    -- "projects/$project_dir/" 2>/dev/null \
+    | awk '$2=="blob" && $NF ~ /\.jsonl$/ {print $4"\t"$NF}')
+
+  if [[ ${#raw_entries[@]} -eq 0 ]]; then
+    echo "No conversations found for '$name' on '$machine'."
+    return 0
+  fi
+
+  # Sort newest first
+  mapfile -t raw_entries < <(printf '%s\n' "${raw_entries[@]}" | sort -r)
+
+  clear
+  printf "Conversations on '%s' — '%s':\n\n" "$machine" "$name"
+  printf "  %-3s  %-10s  %-6s  %s\n" "#" "Date" "Size" "Preview"
+  printf "  %s\n" "$(printf '%0.s─' {1..80})"
+
+  local -a conv_paths=()
+  local j
+  for (( j=0; j<${#raw_entries[@]}; j++ )); do
+    local ts sz path preview
+    IFS='|' read -r ts sz path preview <<< "${raw_entries[$j]}"
+    local size_fmt
+    if (( sz > 1048576 )); then
+      size_fmt="$(( sz / 1048576 ))M"
+    elif (( sz > 1024 )); then
+      size_fmt="$(( sz / 1024 ))K"
+    else
+      size_fmt="${sz}B"
+    fi
+    printf "  %-3d  %-10s  %-6s  %s\n" "$(( j+1 ))" "$ts" "$size_fmt" "$preview"
+    conv_paths+=("$path")
+  done
+
+  printf "\nSelect [1-%d] or q to quit: " "${#conv_paths[@]}"
+  local choice
+  IFS= read -r choice || return 0
+  [[ "$choice" == "q" || "$choice" == "Q" || -z "$choice" ]] && return 0
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#conv_paths[@]} )); then
+    echo "Invalid selection."
+    return 1
+  fi
+
+  # ── Step 3: stream selected conversation through pager ──────────────────────
+  local selected="${conv_paths[$(( choice - 1 ))]}"
+  git -C "$dir" show "refs/remotes/origin/$branch:$selected" 2>/dev/null \
+    | _cdot_format_conversation \
+    | less -R
+}
+
 _cdot_list() {
   local dir="$CDOT_CLAUDE_DIR"
   [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
@@ -1049,6 +1252,7 @@ cdot() {
       ;;
 
     config)   _cdot_config ;;
+    read)     _cdot_read "${2:-}" ;;
     add)      _cdot_add "$name" ;;
     remove)   _cdot_remove "${2:-$name}" ;;
     delete)   _cdot_delete "${2:-}" ;;
