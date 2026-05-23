@@ -949,7 +949,7 @@ _cdot_read() {
 
     printf "\nSelect [1-%d] or q to quit: " "${#combo_machine[@]}"
     local choice
-    IFS= read -r choice || return 0
+    IFS= read -r choice </dev/tty
     [[ "$choice" == "q" || "$choice" == "Q" || -z "$choice" ]] && return 0
     if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#combo_machine[@]} )); then
       echo "Invalid selection."
@@ -973,7 +973,7 @@ _cdot_read() {
 
   echo "Loading conversation list..."
   local -a raw_entries=()
-  while IFS=$'\t' read -r size path; do
+  while IFS=$'\t' read -r size path <&3; do
     local head_data ts preview
     head_data=$(git -C "$dir" show "refs/remotes/origin/$branch:$path" 2>/dev/null \
       | head -c 3000)
@@ -1000,7 +1000,7 @@ for line in sys.stdin:
     except: pass
 ' 2>/dev/null)
     raw_entries+=("${ts:-0000-00-00}|${size}|${path}|${preview:-?}")
-  done < <(git -C "$dir" ls-tree -l "refs/remotes/origin/$branch" \
+  done 3< <(git -C "$dir" ls-tree -l "refs/remotes/origin/$branch" \
     -- "projects/$project_dir/" 2>/dev/null \
     | awk '$2=="blob" && $NF ~ /\.jsonl$/ {print $4"\t"$NF}')
 
@@ -1009,8 +1009,13 @@ for line in sys.stdin:
     return 0
   fi
 
-  # Sort newest first
-  mapfile -t raw_entries < <(printf '%s\n' "${raw_entries[@]}" | sort -r)
+  # Sort newest first (mapfile is bash-only; use a read loop for zsh compat)
+  local _sorted
+  _sorted=$(printf '%s\n' "${raw_entries[@]}" | sort -r)
+  raw_entries=()
+  while IFS= read -r _line; do
+    [[ -n "$_line" ]] && raw_entries+=("$_line")
+  done <<< "$_sorted"
 
   clear
   printf "Conversations on '%s' — '%s':\n\n" "$machine" "$project_name"
@@ -1036,7 +1041,7 @@ for line in sys.stdin:
 
   printf "\nSelect [1-%d] or q to quit: " "${#conv_paths[@]}"
   local choice
-  IFS= read -r choice || return 0
+  IFS= read -r choice </dev/tty
   [[ "$choice" == "q" || "$choice" == "Q" || -z "$choice" ]] && return 0
   if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#conv_paths[@]} )); then
     echo "Invalid selection."
