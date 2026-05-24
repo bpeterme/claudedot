@@ -63,7 +63,9 @@ cdot           # push history for the first time
 | Command | Description |
 |---------|-------------|
 | `cdot add` | Opt current project into history sync |
-| `cdot remove` | Stop syncing current project |
+| `cdot remove [<project>]` | Stop syncing current project (or named project) on this machine |
+| `cdot delete <project>` | Delete all sync history for a project across all machines |
+| `cdot read` | Browse conversations from other machines (read-only, no download) |
 | `cdot list` | List projects with history sync and sizes |
 | `cdot compact` | Squash current project's history to a single commit |
 | `cdot prune` | Remove old or oversized history branches (`--all`: all projects on this machine) |
@@ -72,14 +74,14 @@ cdot           # push history for the first time
 
 | Command | Description |
 |---------|-------------|
-| `cdot doctor` | Run environment diagnostics |
+| `cdot doctor` | Run environment diagnostics (includes companion tool status) |
 | `cdot version` | Show version |
 
 ## How It Works
 
 ### Config sync
 
-Config files are tracked on the `main` branch of your sync remote using a gitignore allowlist — only explicitly listed files are committed, everything else is excluded. On each run, `cdot` pulls the latest config, commits any local changes, and pushes.
+Config files are tracked on the `main` branch of your sync remote using a gitignore allowlist — only explicitly listed files are committed, everything else is excluded. On each run, `cdot` commits any local changes, rebases on the latest remote state, and pushes.
 
 Files synced by default:
 
@@ -90,6 +92,10 @@ Files synced by default:
 | `keybindings.json` | Key bindings |
 | `*.sh` | User scripts (e.g. statusline scripts) |
 | `plugins/**` | Plugin configuration |
+| `skills/**` | User-defined skills |
+| `rules/**` | User-defined rules |
+| `agents/**` | User-defined agents |
+| `output-styles/**` | Output style definitions |
 
 Symlinks are excluded from sync automatically. If a dangling symlink arrives from another machine, `cdot` warns and removes it from the index.
 
@@ -102,6 +108,8 @@ This means:
 - Multiple machines each have their own history branch for the same project
 - `cdot compact` replaces the branch with a single commit, keeping remote storage small
 - `cdot prune` removes branches by age or size
+- `cdot read` lets you browse conversations from any other synced machine without downloading them locally
+- `cdot delete <project>` removes all remote history branches for a project across all machines
 
 ### claudebox integration
 
@@ -115,13 +123,12 @@ Create `~/.config/claudedot/cdot.env` to override defaults. See [`cdot.env.examp
 |----------|---------|-------------|
 | `CDOT_CLAUDE_DIR` | `~/.claude` | Claude Code config directory to sync |
 | `CDOT_SYNC_SIZE_WARN_MB` | `500` | Warn when total history size across opted-in projects exceeds this threshold (MB) |
-| `CDOT_SYNC_PROJECTS` | *(unset)* | Space-separated list of projects opted into history sync. Managed automatically by `cdot add` and `cdot remove` — edit manually only if needed |
 
 ## Companion Tools
 
 ### [claudebox](https://github.com/bpeterme/claudebox)
 
-[claudebox](https://github.com/bpeterme/claudebox) (`cbox`) runs Claude Code inside an isolated container scoped to your current project directory. When claudebox is installed alongside claudedot, sync runs automatically at every session boundary.
+[claudebox](https://github.com/bpeterme/claudebox) (`cbox`) runs Claude Code inside an isolated container scoped to your current project directory. When claudebox is installed alongside claudedot, sync runs automatically at every session boundary — no manual invocation needed.
 
 ```bash
 brew tap bpeterme/claudebox
@@ -136,7 +143,7 @@ cbox           # start Claude Code in a container for the current project
 ```bash
 brew tap bpeterme/flux
 brew install bpeterme/flux/flux
-flux setup     # initialise flux in a git repository
+flux add       # initialise flux in a git repository
 ```
 
 ## License
