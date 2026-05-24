@@ -1,0 +1,35 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Icon
+.Spotlight-V100
+.Trashes
+.fseventsd
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.Trash-*/
+.nfs*
+
+# Editors
+.idea/
+.vscode/
+
+# Shell / Vim
+*.swp
+*.swo
+*.un~
+.envrc
+
+# Test artifacts
+tests/tmp/
