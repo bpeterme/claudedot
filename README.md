@@ -124,6 +124,11 @@ Create `~/.config/claudedot/cdot.env` to override defaults. See [`cdot.env.examp
 | `CDOT_CLAUDE_DIR` | `~/.claude` | Claude Code config directory to sync |
 | `CDOT_SYNC_SIZE_WARN_MB` | `500` | Warn when total history size across opted-in projects exceeds this threshold (MB) |
 
+> [!WARNING]
+> **Do not place `CDOT_CLAUDE_DIR` (default `~/.claude`) on iCloud Drive, Dropbox Smart Sync, Google Drive Stream, or any on-demand cloud storage.** These services evict file contents to stubs when not recently accessed. A git operation on an evicted file produces a corrupt commit or silently reads the wrong content.
+>
+> **Do not run continuous sync tools (Syncthing, rsync daemons, etc.) on the same directory alongside `cdot`.** claudedot is designed to be the sync mechanism — a parallel sync tool will race with claudedot's git operations and risk corrupt history or lost writes.
+
 ## Companion Tools
 
 ### [claudebox](https://github.com/bpeterme/claudebox)
