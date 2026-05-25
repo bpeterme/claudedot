@@ -199,6 +199,15 @@ _cdot_pull() {
   [[ -d "$dir/.git" ]] || return 0
   command -v git >/dev/null || return 0
 
+  # Auto-heal: if remote exists but current branch has no tracking, set it
+  if git -C "$dir" remote get-url origin >/dev/null 2>&1; then
+    if ! git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
+      local _branch; _branch=$(git -C "$dir" branch --show-current 2>/dev/null)
+      [[ -n "$_branch" ]] && \
+        git -C "$dir" branch --set-upstream-to="origin/$_branch" "$_branch" 2>/dev/null || true
+    fi
+  fi
+
   # Only pull if a tracking branch is configured
   git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1 || return 0
 
