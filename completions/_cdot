@@ -1,6 +1,8 @@
 #compdef cdot
 
 _cdot() {
+  local _cdot_cfg="${CDOT_CONFIG_FILE:-$HOME/.config/claudedot/cdot.env}"
+  [[ -f "$_cdot_cfg" ]] && source "$_cdot_cfg"
   local dir="${CDOT_CLAUDE_DIR:-$HOME/.claude}"
   local machine="${USER}@$(hostname -s 2>/dev/null)"
   local -a projects
