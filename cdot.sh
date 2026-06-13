@@ -1369,6 +1369,76 @@ cdot() {
   esac
 }
 
+# ---------------------------------------------------------
+# shell completion
+# ---------------------------------------------------------
+
+_cdot_list_opted_in_names() {
+  local dir="$CDOT_CLAUDE_DIR"
+  [[ -d "$dir/.git" ]] || return 0
+  local machine
+  machine=$(_cdot_machine_id)
+  git -C "$dir" branch -r 2>/dev/null \
+    | grep "origin/history/" \
+    | grep "/${machine}$" \
+    | sed "s|.*origin/history/\([^/]*\)/${machine}\$|\1|"
+}
+
+_cdot_list_all_project_names() {
+  local dir="$CDOT_CLAUDE_DIR"
+  [[ -d "$dir/.git" ]] || return 0
+  git -C "$dir" branch -r 2>/dev/null \
+    | grep "origin/history/" \
+    | sed 's|.*origin/history/\([^/]*\)/.*|\1|' \
+    | sort -u
+}
+
+if [[ -n "${ZSH_VERSION:-}" ]]; then
+  _cdot_zsh_complete() {
+    case $CURRENT in
+      2)
+        compadd list read add remove delete compact prune config doctor version help
+        ;;
+      3)
+        local -a projects
+        case "${words[2]}" in
+          remove)
+            projects=($(_cdot_list_opted_in_names))
+            (( ${#projects[@]} )) && compadd -a projects
+            ;;
+          delete)
+            projects=($(_cdot_list_all_project_names))
+            (( ${#projects[@]} )) && compadd -a projects
+            ;;
+        esac
+        ;;
+    esac
+  }
+  (( ${+functions[compdef]} )) && compdef _cdot_zsh_complete cdot
+elif [[ -n "${BASH_VERSION:-}" ]]; then
+  _cdot_bash_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    local prev="${COMP_WORDS[COMP_CWORD-1]}"
+    COMPREPLY=()
+
+    if [[ $COMP_CWORD -eq 1 ]]; then
+      COMPREPLY=( $(compgen -W \
+        "list read add remove delete compact prune config doctor version help" \
+        -- "$cur") )
+    elif [[ $COMP_CWORD -eq 2 ]]; then
+      case "$prev" in
+        remove)
+          COMPREPLY=( $(compgen -W "$(_cdot_list_opted_in_names)" -- "$cur") )
+          ;;
+        delete)
+          COMPREPLY=( $(compgen -W "$(_cdot_list_all_project_names)" -- "$cur") )
+          ;;
+      esac
+    fi
+  }
+  complete -F _cdot_bash_complete cdot
+fi
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   set -euo pipefail
   cdot "$@"

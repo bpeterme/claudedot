@@ -10,6 +10,7 @@ class Claudedot < Formula
     inreplace "cdot.sh", '_CDOT_VERSION="dev"', "_CDOT_VERSION=\"#{version_str}\""
     bin.install "cdot.sh" => "cdot"
     (share/"claudedot").install "cdot.env.example"
+    zsh_completion.install "completions/_cdot"
   end
 
   def caveats
