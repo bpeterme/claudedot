@@ -398,3 +398,75 @@ setup() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"not opted into history sync"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# _cdot_list_opted_in_names
+# ---------------------------------------------------------------------------
+
+_setup_history_repo() {
+  local dir="$1"
+  mkdir -p "$dir"
+  git -C "$dir" init 2>/dev/null
+  git -C "$dir" config user.email "t@t.com"
+  git -C "$dir" config user.name "T"
+  git -C "$dir" commit --allow-empty -m "test" 2>/dev/null
+}
+
+@test "_cdot_list_opted_in_names: returns empty when .git absent" {
+  CDOT_CLAUDE_DIR="$BATS_TMPDIR/opted-no-git"
+  mkdir -p "$CDOT_CLAUDE_DIR"
+  run _cdot_list_opted_in_names
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "_cdot_list_opted_in_names: returns project opted in on this machine" {
+  local dir="$BATS_TMPDIR/opted-in"
+  _setup_history_repo "$dir"
+  CDOT_CLAUDE_DIR="$dir"
+  local machine branch
+  machine=$(_cdot_machine_id)
+  branch="history/alpha/$machine"
+  git -C "$dir" update-ref "refs/remotes/origin/$branch" \
+    "$(git -C "$dir" rev-parse HEAD)"
+  run _cdot_list_opted_in_names
+  [ "$status" -eq 0 ]
+  [ "$output" = "alpha" ]
+}
+
+@test "_cdot_list_opted_in_names: excludes projects from other machines" {
+  local dir="$BATS_TMPDIR/opted-other"
+  _setup_history_repo "$dir"
+  CDOT_CLAUDE_DIR="$dir"
+  git -C "$dir" update-ref "refs/remotes/origin/history/beta/other@host" \
+    "$(git -C "$dir" rev-parse HEAD)"
+  run _cdot_list_opted_in_names
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+# ---------------------------------------------------------------------------
+# _cdot_list_all_project_names
+# ---------------------------------------------------------------------------
+
+@test "_cdot_list_all_project_names: returns empty when .git absent" {
+  CDOT_CLAUDE_DIR="$BATS_TMPDIR/all-no-git"
+  mkdir -p "$CDOT_CLAUDE_DIR"
+  run _cdot_list_all_project_names
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "_cdot_list_all_project_names: returns all unique project names" {
+  local dir="$BATS_TMPDIR/all-projects"
+  _setup_history_repo "$dir"
+  CDOT_CLAUDE_DIR="$dir"
+  local sha
+  sha="$(git -C "$dir" rev-parse HEAD)"
+  git -C "$dir" update-ref "refs/remotes/origin/history/alpha/user@host1" "$sha"
+  git -C "$dir" update-ref "refs/remotes/origin/history/alpha/user@host2" "$sha"
+  git -C "$dir" update-ref "refs/remotes/origin/history/beta/user@host1" "$sha"
+  run _cdot_list_all_project_names
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'alpha\nbeta')" ]
+}

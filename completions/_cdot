@@ -1,0 +1,33 @@
+#compdef cdot
+
+_cdot() {
+  local dir="${CDOT_CLAUDE_DIR:-$HOME/.claude}"
+  local machine="${USER}@$(hostname -s 2>/dev/null)"
+  local -a projects
+
+  case $CURRENT in
+    2)
+      compadd list read add remove delete compact prune config doctor version help
+      ;;
+    3)
+      case "${words[2]}" in
+        remove)
+          projects=($(git -C "$dir" branch -r 2>/dev/null \
+            | grep "origin/history/" \
+            | grep "/${machine}$" \
+            | sed "s|.*origin/history/\([^/]*\)/${machine}\$|\1|"))
+          (( ${#projects[@]} )) && compadd -a projects
+          ;;
+        delete)
+          projects=($(git -C "$dir" branch -r 2>/dev/null \
+            | grep "origin/history/" \
+            | sed 's|.*origin/history/\([^/]*\)/.*|\1|' \
+            | sort -u))
+          (( ${#projects[@]} )) && compadd -a projects
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_cdot "$@"
