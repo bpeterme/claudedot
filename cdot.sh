@@ -61,6 +61,7 @@ fi
 unset _CDOT_CONFIG
 
 CDOT_CLAUDE_DIR="${CDOT_CLAUDE_DIR:-$HOME/.claude}"
+CDOT_OPENCODE_CONFIG="${CDOT_OPENCODE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json}"
 CDOT_SYNC_SIZE_WARN_MB="${CDOT_SYNC_SIZE_WARN_MB:-500}"
 
 _CDOT_VERSION="dev"
@@ -217,12 +218,28 @@ _cdot_pull() {
 
   # Exclude and warn about any symlinks that arrived from the remote
   _cdot_exclude_symlinks
+
+  # Restore opencode config if the sync dir has it
+  if [[ -f "$dir/opencode.json" ]]; then
+    mkdir -p "$(dirname "$CDOT_OPENCODE_CONFIG")"
+    cp "$dir/opencode.json" "$CDOT_OPENCODE_CONFIG"
+  fi
 }
 
 _cdot_push() {
   local dir="$CDOT_CLAUDE_DIR"
   [[ -d "$dir/.git" ]] || return 0
   command -v git >/dev/null || return 0
+
+  # Copy opencode config into the sync dir before staging (no remote required)
+  if [[ -f "$CDOT_OPENCODE_CONFIG" ]]; then
+    cp "$CDOT_OPENCODE_CONFIG" "$dir/opencode.json"
+  fi
+
+  # Self-heal: add !opencode.json to existing repos that pre-date this feature
+  if [[ -f "$dir/.gitignore" ]] && ! grep -qx "!opencode.json" "$dir/.gitignore"; then
+    echo "!opencode.json" >> "$dir/.gitignore"
+  fi
 
   # Bail if a rebase is in progress (unresolved conflict from a prior sync)
   if [[ -d "$dir/.git/rebase-merge" || -d "$dir/.git/rebase-apply" ]]; then
@@ -297,6 +314,9 @@ _cdot_write_gitignore() {
 !agents/**
 !output-styles/
 !output-styles/**
+
+# opencode config (synced alongside Claude config)
+!opencode.json
 EOF
 }
 
@@ -589,6 +609,20 @@ _cdot_push_history() {
     return 1
   fi
 }
+
+# opencode config sync — thin wrappers over _cdot_pull/_cdot_push.
+# The copy-in/copy-out of opencode.json is embedded in those functions,
+# so calling them is all that's needed.
+_cdot_pull_opencode() { _cdot_pull; }
+_cdot_push_opencode() { _cdot_push; }
+
+# opencode session history — not implemented.
+# opencode stores all sessions in a single SQLite database
+# (~/.local/share/opencode/opencode.db), which doesn't map to the
+# per-project JSONL branch pattern cdot uses for Claude history.
+# These stubs exist so claudebox can call them safely; they silently succeed.
+_cdot_pull_history_opencode() { return 0; }
+_cdot_push_history_opencode() { return 0; }
 
 _cdot_add() {
   local name="$1"
@@ -1251,6 +1285,16 @@ _cdot_doctor_inline() {
     else
       echo "  history projects: none (use: cdot add)"
     fi
+
+    if [[ -f "$CDOT_OPENCODE_CONFIG" ]]; then
+      if [[ -f "$CDOT_CLAUDE_DIR/opencode.json" ]]; then
+        echo "  opencode config: synced ($CDOT_OPENCODE_CONFIG)"
+      else
+        echo "  opencode config: found locally — will sync on next push"
+      fi
+    else
+      echo "  opencode config: not present ($CDOT_OPENCODE_CONFIG)"
+    fi
   else
     echo "ℹ sync not configured (run: cdot config)"
   fi
@@ -1353,12 +1397,16 @@ cdot() {
       ;;
 
     # Plumbing: called by cbox, not shown in help
-    _api-version)   echo "1" ;;
-    _pull)          _cdot_pull ;;
-    _push)          _cdot_push ;;
-    _pull-history)  _cdot_pull_history "${2:-}" ;;
-    _push-history)  _cdot_push_history "${2:-}" ;;
-    _doctor)        _cdot_doctor_inline ;;
+    _api-version)            echo "2" ;;
+    _pull)                   _cdot_pull ;;
+    _push)                   _cdot_push ;;
+    _pull-history)           _cdot_pull_history "${2:-}" ;;
+    _push-history)           _cdot_push_history "${2:-}" ;;
+    _pull-opencode)          _cdot_pull_opencode ;;
+    _push-opencode)          _cdot_push_opencode ;;
+    _pull-history-opencode)  _cdot_pull_history_opencode "${2:-}" ;;
+    _push-history-opencode)  _cdot_push_history_opencode "${2:-}" ;;
+    _doctor)                 _cdot_doctor_inline ;;
 
     *)
       echo "Unknown command: $1"
@@ -1368,6 +1416,76 @@ cdot() {
       ;;
   esac
 }
+
+# ---------------------------------------------------------
+# shell completion
+# ---------------------------------------------------------
+
+_cdot_list_opted_in_names() {
+  local dir="$CDOT_CLAUDE_DIR"
+  [[ -d "$dir/.git" ]] || return 0
+  local machine
+  machine=$(_cdot_machine_id)
+  git -C "$dir" branch -r 2>/dev/null \
+    | grep "origin/history/" \
+    | grep "/${machine}$" \
+    | sed "s|.*origin/history/\([^/]*\)/${machine}\$|\1|"
+}
+
+_cdot_list_all_project_names() {
+  local dir="$CDOT_CLAUDE_DIR"
+  [[ -d "$dir/.git" ]] || return 0
+  git -C "$dir" branch -r 2>/dev/null \
+    | grep "origin/history/" \
+    | sed 's|.*origin/history/\([^/]*\)/.*|\1|' \
+    | sort -u
+}
+
+if [[ -n "${ZSH_VERSION:-}" ]]; then
+  _cdot_zsh_complete() {
+    case $CURRENT in
+      2)
+        compadd list read add remove delete compact prune config doctor version help
+        ;;
+      3)
+        local -a projects
+        case "${words[2]}" in
+          remove)
+            projects=($(_cdot_list_opted_in_names))
+            (( ${#projects[@]} )) && compadd -a projects
+            ;;
+          delete)
+            projects=($(_cdot_list_all_project_names))
+            (( ${#projects[@]} )) && compadd -a projects
+            ;;
+        esac
+        ;;
+    esac
+  }
+  (( ${+functions[compdef]} )) && compdef _cdot_zsh_complete cdot
+elif [[ -n "${BASH_VERSION:-}" ]]; then
+  _cdot_bash_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    local prev="${COMP_WORDS[COMP_CWORD-1]}"
+    COMPREPLY=()
+
+    if [[ $COMP_CWORD -eq 1 ]]; then
+      COMPREPLY=( $(compgen -W \
+        "list read add remove delete compact prune config doctor version help" \
+        -- "$cur") )
+    elif [[ $COMP_CWORD -eq 2 ]]; then
+      case "$prev" in
+        remove)
+          COMPREPLY=( $(compgen -W "$(_cdot_list_opted_in_names)" -- "$cur") )
+          ;;
+        delete)
+          COMPREPLY=( $(compgen -W "$(_cdot_list_all_project_names)" -- "$cur") )
+          ;;
+      esac
+    fi
+  }
+  complete -F _cdot_bash_complete cdot
+fi
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   set -euo pipefail

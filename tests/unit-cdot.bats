@@ -398,3 +398,167 @@ setup() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"not opted into history sync"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# _cdot_list_opted_in_names
+# ---------------------------------------------------------------------------
+
+_setup_history_repo() {
+  local dir="$1"
+  mkdir -p "$dir"
+  git -C "$dir" init 2>/dev/null
+  git -C "$dir" config user.email "t@t.com"
+  git -C "$dir" config user.name "T"
+  git -C "$dir" commit --allow-empty -m "test" 2>/dev/null
+}
+
+@test "_cdot_list_opted_in_names: returns empty when .git absent" {
+  CDOT_CLAUDE_DIR="$BATS_TMPDIR/opted-no-git"
+  mkdir -p "$CDOT_CLAUDE_DIR"
+  run _cdot_list_opted_in_names
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "_cdot_list_opted_in_names: returns project opted in on this machine" {
+  local dir="$BATS_TMPDIR/opted-in"
+  _setup_history_repo "$dir"
+  CDOT_CLAUDE_DIR="$dir"
+  local machine branch
+  machine=$(_cdot_machine_id)
+  branch="history/alpha/$machine"
+  git -C "$dir" update-ref "refs/remotes/origin/$branch" \
+    "$(git -C "$dir" rev-parse HEAD)"
+  run _cdot_list_opted_in_names
+  [ "$status" -eq 0 ]
+  [ "$output" = "alpha" ]
+}
+
+@test "_cdot_list_opted_in_names: excludes projects from other machines" {
+  local dir="$BATS_TMPDIR/opted-other"
+  _setup_history_repo "$dir"
+  CDOT_CLAUDE_DIR="$dir"
+  git -C "$dir" update-ref "refs/remotes/origin/history/beta/other@host" \
+    "$(git -C "$dir" rev-parse HEAD)"
+  run _cdot_list_opted_in_names
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+# ---------------------------------------------------------------------------
+# _cdot_list_all_project_names
+# ---------------------------------------------------------------------------
+
+@test "_cdot_list_all_project_names: returns empty when .git absent" {
+  CDOT_CLAUDE_DIR="$BATS_TMPDIR/all-no-git"
+  mkdir -p "$CDOT_CLAUDE_DIR"
+  run _cdot_list_all_project_names
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "_cdot_list_all_project_names: returns all unique project names" {
+  local dir="$BATS_TMPDIR/all-projects"
+  _setup_history_repo "$dir"
+  CDOT_CLAUDE_DIR="$dir"
+  local sha
+  sha="$(git -C "$dir" rev-parse HEAD)"
+  git -C "$dir" update-ref "refs/remotes/origin/history/alpha/user@host1" "$sha"
+  git -C "$dir" update-ref "refs/remotes/origin/history/alpha/user@host2" "$sha"
+  git -C "$dir" update-ref "refs/remotes/origin/history/beta/user@host1" "$sha"
+  run _cdot_list_all_project_names
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'alpha\nbeta')" ]
+}
+
+# ---------------------------------------------------------------------------
+# API version
+# ---------------------------------------------------------------------------
+
+@test "cdot _api-version: returns 2" {
+  run cdot _api-version
+  [ "$status" -eq 0 ]
+  [ "$output" = "2" ]
+}
+
+# ---------------------------------------------------------------------------
+# opencode config sync
+# ---------------------------------------------------------------------------
+
+@test "_cdot_write_gitignore: includes !opencode.json in allowlist" {
+  local dir="$BATS_TMPDIR/gi-oc"
+  mkdir -p "$dir"
+  _cdot_write_gitignore "$dir"
+  run grep -x "!opencode.json" "$dir/.gitignore"
+  [ "$status" -eq 0 ]
+}
+
+@test "_cdot_push: adds !opencode.json to existing gitignore that lacks it" {
+  local dir="$BATS_TMPDIR/oc-gi-heal"
+  mkdir -p "$dir"
+  git -C "$dir" init -b main 2>/dev/null || { git -C "$dir" init && git -C "$dir" branch -M main; }
+  git -C "$dir" config user.email "t@t.com"
+  git -C "$dir" config user.name "T"
+  git -C "$dir" commit --allow-empty -m "init" 2>/dev/null
+  echo "!settings.json" > "$dir/.gitignore"
+  CDOT_CLAUDE_DIR="$dir"
+  # Stub git push so the test doesn't need a remote
+  git() { [[ "${*}" == *"push"* ]] && return 0; command git "$@"; }
+  CDOT_OPENCODE_CONFIG="/dev/null/nonexistent" _cdot_push
+  run grep -x "!opencode.json" "$dir/.gitignore"
+  [ "$status" -eq 0 ]
+}
+
+@test "_cdot_push: copies opencode.json into CDOT_CLAUDE_DIR when present" {
+  local dir="$BATS_TMPDIR/oc-push"
+  mkdir -p "$dir"
+  git -C "$dir" init -b main 2>/dev/null || { git -C "$dir" init && git -C "$dir" branch -M main; }
+  git -C "$dir" config user.email "t@t.com"
+  git -C "$dir" config user.name "T"
+  git -C "$dir" commit --allow-empty -m "init" 2>/dev/null
+  CDOT_CLAUDE_DIR="$dir"
+  local oc_cfg="$BATS_TMPDIR/oc-src-opencode.json"
+  echo '{"providers":{}}' > "$oc_cfg"
+  git() { [[ "${*}" == *"push"* ]] && return 0; command git "$@"; }
+  CDOT_OPENCODE_CONFIG="$oc_cfg" _cdot_push
+  [ -f "$dir/opencode.json" ]
+  run grep -q "providers" "$dir/opencode.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "_cdot_pull: copies opencode.json from CDOT_CLAUDE_DIR to CDOT_OPENCODE_CONFIG" {
+  local dir="$BATS_TMPDIR/oc-pull"
+  mkdir -p "$dir"
+  git -C "$dir" init 2>/dev/null
+  git -C "$dir" config user.email "t@t.com"
+  git -C "$dir" config user.name "T"
+  git -C "$dir" commit --allow-empty -m "init" 2>/dev/null
+  # Simulate the post-pull state: opencode.json already in the sync dir
+  echo '{"providers":{"anthropic":{}}}' > "$dir/opencode.json"
+  CDOT_CLAUDE_DIR="$dir"
+  local oc_out="$BATS_TMPDIR/oc-out-dir/opencode.json"
+  # Stub git so @{u} check and pull both succeed without a real remote
+  git() {
+    case "${*}" in
+      *"@{u}"*) return 0 ;;
+      *"pull"*) return 0 ;;
+      *) command git "$@" ;;
+    esac
+  }
+  CDOT_OPENCODE_CONFIG="$oc_out" _cdot_pull
+  [ -f "$oc_out" ]
+  run grep -q "anthropic" "$oc_out"
+  [ "$status" -eq 0 ]
+}
+
+@test "_cdot_pull_history_opencode: succeeds silently (stub)" {
+  run _cdot_pull_history_opencode "myproject"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "_cdot_push_history_opencode: succeeds silently (stub)" {
+  run _cdot_push_history_opencode "myproject"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
