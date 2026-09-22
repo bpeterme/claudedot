@@ -562,3 +562,36 @@ _setup_history_repo() {
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+@test "_cdot_write_gitignore: excludes the plugin sync cache but keeps plugin config" {
+  local dir="$BATS_TMPDIR/plugins-gi"
+  rm -rf "$dir"; mkdir -p "$dir/plugins/synced/abc"
+  git -C "$dir" init -q
+  touch "$dir/plugins/synced/abc/.marketplaces.json" "$dir/plugins/known_marketplaces.json"
+  _cdot_write_gitignore "$dir"
+  run git -C "$dir" check-ignore -q plugins/synced/abc/.marketplaces.json
+  [ "$status" -eq 0 ]
+  run git -C "$dir" check-ignore -q plugins/known_marketplaces.json
+  [ "$status" -ne 0 ]
+}
+
+@test "_cdot_push: untracks an already-committed plugin sync cache and keeps it on disk" {
+  local dir="$BATS_TMPDIR/plugins-heal" remote="$BATS_TMPDIR/plugins-heal-remote.git"
+  rm -rf "$dir" "$remote"
+  git init -q --bare "$remote"
+  mkdir -p "$dir/plugins/synced/abc"
+  git -C "$dir" init -q -b main 2>/dev/null || { git -C "$dir" init -q && git -C "$dir" branch -M main; }
+  git -C "$dir" config user.email "t@t.com"
+  git -C "$dir" config user.name "T"
+  printf '*\n!.gitignore\n!plugins/\n!plugins/**\n' > "$dir/.gitignore"
+  echo '{}' > "$dir/plugins/synced/abc/.marketplaces.json"
+  echo '{}' > "$dir/plugins/known_marketplaces.json"
+  git -C "$dir" add -A && git -C "$dir" commit -q -m init
+  git -C "$dir" remote add origin "$remote"
+  git -C "$dir" push -q -u origin main
+  CDOT_CLAUDE_DIR="$dir" CDOT_OPENCODE_CONFIG="/dev/null/nonexistent" _cdot_push
+  [ -z "$(git -C "$dir" ls-files plugins/synced)" ]
+  [ -f "$dir/plugins/synced/abc/.marketplaces.json" ]
+  [ -n "$(git -C "$dir" ls-files plugins/known_marketplaces.json)" ]
+  grep -qx "plugins/synced/" "$dir/.gitignore"
+}

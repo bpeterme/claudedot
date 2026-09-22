@@ -241,6 +241,12 @@ _cdot_push() {
     echo "!opencode.json" >> "$dir/.gitignore"
   fi
 
+  # Self-heal: stop syncing Claude Code's per-machine plugin cache in repos
+  # that pre-date the exclusion (it caused rebase conflicts on every sync)
+  if [[ -f "$dir/.gitignore" ]] && ! grep -qx "plugins/synced/" "$dir/.gitignore"; then
+    echo "plugins/synced/" >> "$dir/.gitignore"
+  fi
+
   # Bail if a rebase is in progress (unresolved conflict from a prior sync)
   if [[ -d "$dir/.git/rebase-merge" || -d "$dir/.git/rebase-apply" ]]; then
     echo "⚠  Rebase in progress in $dir — resolve conflicts before syncing."
@@ -249,6 +255,12 @@ _cdot_push() {
 
   # Only push if a remote is configured
   git -C "$dir" remote get-url origin >/dev/null 2>&1 || return 0
+
+  # Untrack the plugin cache if an older sync committed it (.gitignore alone
+  # does not untrack files); the files stay on disk
+  if [[ -n "$(git -C "$dir" ls-files plugins/synced)" ]]; then
+    git -C "$dir" rm -r -q --cached plugins/synced
+  fi
 
   git -C "$dir" add -A
   # Un-stage symlinks and embedded git repos — .gitignore allowlist overrides
@@ -304,6 +316,9 @@ _cdot_write_gitignore() {
 # Plugin configuration
 !plugins/
 !plugins/**
+# ...except Claude Code's per-machine plugin sync cache: every machine
+# rewrites it independently, so syncing it only produces conflicts
+plugins/synced/
 
 # User-defined extensions
 !skills/

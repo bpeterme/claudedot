@@ -1,8 +1,8 @@
 # claudedot
 
-A shell utility (`cdot`) that syncs your [Claude Code](https://github.com/anthropics/claude-code) config and per-project conversation history across machines via a private git remote.
+A shell utility (`cdot`) that syncs your [Claude Code](https://github.com/anthropics/claude-code) config, [opencode](https://opencode.ai) config, and per-project conversation history across machines via a private git remote.
 
-Config files (settings, keybindings, global instructions) sync automatically on every run. Project conversation history is opt-in per project and stored on isolated branches — it never touches the main branch. If [claudebox](https://github.com/bpeterme/claudebox) is installed, `cdot` runs automatically at session start and exit with no manual steps needed.
+Config files (settings, keybindings, global instructions) and opencode config sync automatically on every run. Project conversation history is opt-in per project and stored on isolated branches — it never touches the main branch. If [claudebox](https://github.com/bpeterme/claudebox) is installed, `cdot` runs automatically at session start and exit for both Claude Code and opencode sessions with no manual steps needed.
 
 ## Prerequisites
 
@@ -96,6 +96,10 @@ Files synced by default:
 | `rules/**` | User-defined rules |
 | `agents/**` | User-defined agents |
 | `output-styles/**` | Output style definitions |
+| `opencode.json` | opencode config (API keys, model settings) |
+
+> [!CAUTION]
+> `opencode.json` may contain API keys in plain text. Ensure your sync remote is a **private** repository.
 
 Symlinks are excluded from sync automatically. If a dangling symlink arrives from another machine, `cdot` warns and removes it from the index.
 
@@ -113,7 +117,15 @@ This means:
 
 ### claudebox integration
 
-If [claudebox](https://github.com/bpeterme/claudebox) is installed, it calls `cdot _pull` and `cdot _push` (and the history equivalents) automatically at session start and exit. No manual `cdot` invocations are needed during normal use.
+If [claudebox](https://github.com/bpeterme/claudebox) is installed, it calls the appropriate cdot plumbing commands automatically at session start and exit — no manual `cdot` invocations are needed during normal use.
+
+| Session type | cdot calls |
+|---|---|
+| `cbox` (Claude Code) | `cdot _pull` / `cdot _push` + history equivalents |
+| `cbox oc` (opencode) | `cdot _pull-opencode` / `cdot _push-opencode` |
+
+> [!NOTE]
+> opencode stores conversation history in a single SQLite database (`~/.local/share/opencode/opencode.db`) rather than per-project files, so history sync for opencode sessions is not currently supported. Config sync (`opencode.json`) works normally.
 
 ## Configuration
 
@@ -122,6 +134,7 @@ Create `~/.config/claudedot/cdot.env` to override defaults. See [`cdot.env.examp
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CDOT_CLAUDE_DIR` | `~/.claude` | Claude Code config directory to sync |
+| `CDOT_OPENCODE_CONFIG` | `~/.config/opencode/opencode.json` | opencode config file to sync (may contain API keys — keep your remote private) |
 | `CDOT_SYNC_SIZE_WARN_MB` | `500` | Warn when total history size across opted-in projects exceeds this threshold (MB) |
 
 > [!WARNING]
