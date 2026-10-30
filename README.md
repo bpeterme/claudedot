@@ -124,6 +124,8 @@ If [claudebox](https://github.com/bpeterme/claudebox) is installed, it calls the
 | `cbox` (Claude Code) | `cdot _pull` / `cdot _push` + history equivalents |
 | `cbox oc` (opencode) | `cdot _pull-opencode` / `cdot _push-opencode` |
 
+claudebox passes its Claude folder (`CBOX_CLAUDE_DIR`, default `~/.config/claudebox/.claude`) as `CDOT_CLAUDE_DIR`, so these calls sync the folder containers use. A `CDOT_CLAUDE_DIR` set in `cdot.env` takes precedence.
+
 > [!NOTE]
 > opencode stores conversation history in a single SQLite database (`~/.local/share/opencode/opencode.db`) rather than per-project files, so history sync for opencode sessions is not currently supported. Config sync (`opencode.json`) works normally.
 
