@@ -100,6 +100,8 @@ Files synced by default:
 
 > [!CAUTION]
 > `opencode.json` may contain API keys in plain text. Ensure your sync remote is a **private** repository.
+>
+> cdot installs the **committed** `opencode.json` on your machine, never the file in the sync folder: claudebox containers can write that folder, and opencode runs the commands its config names (MCP servers). On a machine without its own opencode config, a changed `opencode.json` in the sync folder is not synced; it is kept as `opencode.json.rejected`. Note that the sync folder, and so this file with its API keys, is readable inside claudebox containers.
 
 Symlinks are excluded from sync automatically. If a dangling symlink arrives from another machine, `cdot` warns and removes it from the index.
 
