@@ -527,14 +527,15 @@ _setup_history_repo() {
 }
 
 @test "_cdot_pull: copies opencode.json from CDOT_CLAUDE_DIR to CDOT_OPENCODE_CONFIG" {
-  local dir="$BATS_TMPDIR/oc-pull"
+  local dir="$BATS_TMPDIR/oc-synced"
   mkdir -p "$dir"
   git -C "$dir" init 2>/dev/null
   git -C "$dir" config user.email "t@t.com"
   git -C "$dir" config user.name "T"
   git -C "$dir" commit --allow-empty -m "init" 2>/dev/null
-  # Simulate the post-pull state: opencode.json already in the sync dir
+  # Simulate the post-pull state: opencode.json committed in the sync dir
   echo '{"providers":{"anthropic":{}}}' > "$dir/opencode.json"
+  git -C "$dir" add opencode.json && git -C "$dir" commit -qm "oc"
   CDOT_CLAUDE_DIR="$dir"
   local oc_out="$BATS_TMPDIR/oc-out-dir/opencode.json"
   # Stub git so @{u} check and pull both succeed without a real remote
@@ -549,6 +550,46 @@ _setup_history_repo() {
   [ -f "$oc_out" ]
   run grep -q "anthropic" "$oc_out"
   [ "$status" -eq 0 ]
+}
+
+_oc_repo() {
+  OC_DIR="$BATS_TMPDIR/oc-guard-$1"
+  rm -rf "$OC_DIR"; mkdir -p "$OC_DIR"
+  git -C "$OC_DIR" init -q
+  git -C "$OC_DIR" config user.email "t@t.com"
+  git -C "$OC_DIR" config user.name "T"
+  echo '{"mcp":{}}' > "$OC_DIR/opencode.json"
+  git -C "$OC_DIR" add opencode.json && git -C "$OC_DIR" commit -qm "oc"
+  CDOT_CLAUDE_DIR="$OC_DIR"
+}
+
+@test "_cdot_pull: installs the committed opencode.json, never an edit made in the sync dir" {
+  _oc_repo a
+  # e.g. written from inside a claudebox container
+  echo '{"mcp":{"x":{"command":["sh","-c","evil"]}}}' > "$OC_DIR/opencode.json"
+  local oc_out="$BATS_TMPDIR/oc-guard-out/opencode.json"; rm -f "$oc_out"
+  git() { case "${*}" in *"@{u}"*|*"pull"*) return 0 ;; *) command git "$@" ;; esac; }
+  CDOT_OPENCODE_CONFIG="$oc_out" _cdot_pull
+  [ "$(cat "$oc_out")" = '{"mcp":{}}' ]
+}
+
+@test "_cdot_push: without opencode on this machine, a foreign opencode.json is set aside, not synced" {
+  _oc_repo b
+  echo '{"mcp":{"x":{"command":["sh","-c","evil"]}}}' > "$OC_DIR/opencode.json"
+  git() { [[ "${*}" == *"push"* ]] && return 0; command git "$@"; }
+  CDOT_OPENCODE_CONFIG="$BATS_TMPDIR/no-such-opencode.json" run _cdot_push
+  [[ "$output" == *"opencode.json was not written by this machine's opencode — not synced."* ]]
+  [ "$(command git -C "$OC_DIR" show HEAD:opencode.json)" = '{"mcp":{}}' ]
+  [ "$(cat "$OC_DIR/opencode.json")" = '{"mcp":{}}' ]
+  grep -q evil "$OC_DIR/opencode.json.rejected"
+}
+
+@test "_cdot_push: an unchanged synced opencode.json is left alone without a warning" {
+  _oc_repo c
+  git() { [[ "${*}" == *"push"* ]] && return 0; command git "$@"; }
+  CDOT_OPENCODE_CONFIG="$BATS_TMPDIR/no-such-opencode.json" run _cdot_push
+  [[ "$output" != *"not synced"* ]]
+  [ ! -e "$OC_DIR/opencode.json.rejected" ]
 }
 
 @test "_cdot_pull_history_opencode: succeeds silently (stub)" {

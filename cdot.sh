@@ -219,11 +219,43 @@ _cdot_pull() {
   # Exclude and warn about any symlinks that arrived from the remote
   _cdot_exclude_symlinks
 
-  # Restore opencode config if the sync dir has it
-  if [[ -f "$dir/opencode.json" ]]; then
+  _cdot_install_opencode
+}
+
+# Installs the synced opencode config on this machine. Takes the committed
+# version, never the file in the sync dir: claudebox containers can write that
+# dir, and opencode on the Mac runs the commands its config names (MCP servers).
+_cdot_install_opencode() {
+  local dir="$CDOT_CLAUDE_DIR" tmp
+  git -C "$dir" cat-file -e HEAD:opencode.json 2>/dev/null || return 0
+  tmp=$(mktemp) || return 0
+  if git -C "$dir" show HEAD:opencode.json > "$tmp" 2>/dev/null \
+      && ! cmp -s "$tmp" "$CDOT_OPENCODE_CONFIG"; then
     mkdir -p "$(dirname "$CDOT_OPENCODE_CONFIG")"
-    cp "$dir/opencode.json" "$CDOT_OPENCODE_CONFIG"
+    cp "$tmp" "$CDOT_OPENCODE_CONFIG"
   fi
+  rm -f "$tmp"
+}
+
+# The sync dir's opencode.json may only come from this machine's opencode
+# config. Without one here, a version that differs from the last commit was
+# written by something else (e.g. code in a claudebox container): it is moved
+# aside as opencode.json.rejected (not synced) instead of being committed.
+_cdot_stage_opencode() {
+  local dir="$CDOT_CLAUDE_DIR"
+  if [[ -f "$CDOT_OPENCODE_CONFIG" ]]; then
+    cp "$CDOT_OPENCODE_CONFIG" "$dir/opencode.json"
+    return 0
+  fi
+  [[ -f "$dir/opencode.json" ]] || return 0
+  if git -C "$dir" cat-file -e HEAD:opencode.json 2>/dev/null \
+      && git -C "$dir" show HEAD:opencode.json | cmp -s - "$dir/opencode.json"; then
+    return 0
+  fi
+  mv "$dir/opencode.json" "$dir/opencode.json.rejected"
+  git -C "$dir" checkout -q HEAD -- opencode.json 2>/dev/null || true
+  echo "⚠  $dir/opencode.json was not written by this machine's opencode — not synced."
+  echo "   Kept as $dir/opencode.json.rejected"
 }
 
 _cdot_push() {
@@ -232,9 +264,7 @@ _cdot_push() {
   command -v git >/dev/null || return 0
 
   # Copy opencode config into the sync dir before staging (no remote required)
-  if [[ -f "$CDOT_OPENCODE_CONFIG" ]]; then
-    cp "$CDOT_OPENCODE_CONFIG" "$dir/opencode.json"
-  fi
+  _cdot_stage_opencode
 
   # Self-heal: add !opencode.json to existing repos that pre-date this feature
   if [[ -f "$dir/.gitignore" ]] && ! grep -qx "!opencode.json" "$dir/.gitignore"; then

@@ -100,6 +100,8 @@ Files synced by default:
 
 > [!CAUTION]
 > `opencode.json` may contain API keys in plain text. Ensure your sync remote is a **private** repository.
+>
+> cdot installs the **committed** `opencode.json` on your machine, never the file in the sync folder: claudebox containers can write that folder, and opencode runs the commands its config names (MCP servers). On a machine without its own opencode config, a changed `opencode.json` in the sync folder is not synced; it is kept as `opencode.json.rejected`. Note that the sync folder, and so this file with its API keys, is readable inside claudebox containers.
 
 Symlinks are excluded from sync automatically. If a dangling symlink arrives from another machine, `cdot` warns and removes it from the index.
 
@@ -123,6 +125,8 @@ If [claudebox](https://github.com/bpeterme/claudebox) is installed, it calls the
 |---|---|
 | `cbox` (Claude Code) | `cdot _pull` / `cdot _push` + history equivalents |
 | `cbox oc` (opencode) | `cdot _pull-opencode` / `cdot _push-opencode` |
+
+claudebox passes its Claude folder (`CBOX_CLAUDE_DIR`, default `~/.config/claudebox/.claude`) as `CDOT_CLAUDE_DIR`, so these calls sync the folder containers use. A `CDOT_CLAUDE_DIR` set in `cdot.env` takes precedence.
 
 > [!NOTE]
 > opencode stores conversation history in a single SQLite database (`~/.local/share/opencode/opencode.db`) rather than per-project files, so history sync for opencode sessions is not currently supported. Config sync (`opencode.json`) works normally.
