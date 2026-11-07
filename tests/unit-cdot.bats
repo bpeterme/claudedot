@@ -126,12 +126,12 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "_cdot_write_gitignore: gitignore does not allow projects/" {
+@test "_cdot_write_gitignore: allows only the memory folders under projects/" {
   local dir="$BATS_TMPDIR/gitignore-no-projects"
-  mkdir -p "$dir"
+  rm -rf "$dir"; mkdir -p "$dir"
   _cdot_write_gitignore "$dir"
-  run grep -q "projects/" "$dir/.gitignore"
-  [ "$status" -ne 0 ]
+  run grep '^!projects/' "$dir/.gitignore"
+  [ "$output" = $'!projects/\n!projects/*/\n!projects/*/memory/\n!projects/*/memory/**' ]
 }
 
 @test "_cdot_write_gitignore: skips write when already correct" {
@@ -143,13 +143,14 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "_cdot_write_gitignore: overwrites old format containing !projects/" {
+@test "_cdot_write_gitignore: overwrites the old format that synced all of projects/" {
   local dir="$BATS_TMPDIR/gitignore-migrate"
   mkdir -p "$dir"
   printf '*\n!projects/\n!projects/**\n' > "$dir/.gitignore"
   _cdot_write_gitignore "$dir"
-  run grep -q "^!projects/" "$dir/.gitignore"
+  run grep -qx '!projects/\*\*' "$dir/.gitignore"
   [ "$status" -ne 0 ]
+  grep -qx '!skills/' "$dir/.gitignore"
 }
 
 # ---------------------------------------------------------------------------
@@ -730,4 +731,203 @@ _complete_cdot() {
     [[ "$output" != *"internals leaked"* ]] || { echo "$sh: $output"; false; }
     [[ "$output" == *"cdot "* ]] || { echo "$sh: $output"; false; }
   done
+}
+
+# ---------------------------------------------------------------------------
+# memory — projects/<dir>/memory/ on main, shared by all machines
+# ---------------------------------------------------------------------------
+
+# A sync dir ("machine") at $BATS_TMPDIR/mem/$1 on the bare remote
+# $BATS_TMPDIR/mem/remote.git; the first call creates and seeds the remote.
+_mem_machine() {
+  local root="$BATS_TMPDIR/mem" dir="$BATS_TMPDIR/mem/$1"
+  mkdir -p "$root"
+  if [[ ! -d "$root/remote.git" ]]; then
+    git init -q --bare "$root/remote.git"
+    git -C "$root/remote.git" symbolic-ref HEAD refs/heads/main
+  fi
+  if git -C "$root/remote.git" rev-parse -q --verify refs/heads/main >/dev/null; then
+    git clone -q "$root/remote.git" "$dir"
+  else
+    mkdir -p "$dir"
+    git -C "$dir" init -q -b main
+    git -C "$dir" remote add origin "$root/remote.git"
+  fi
+  git -C "$dir" config user.email "t@t.com"
+  git -C "$dir" config user.name "T"
+  _cdot_write_gitignore "$dir"
+  if ! git -C "$dir" rev-parse -q --verify HEAD >/dev/null; then
+    git -C "$dir" add -A && git -C "$dir" commit -q -m init
+    git -C "$dir" push -q -u origin main
+  fi
+}
+
+_mem_note() {  # machine project file text
+  mkdir -p "$BATS_TMPDIR/mem/$1/projects/-Workspace-$2/memory"
+  printf '%s\n' "$4" >> "$BATS_TMPDIR/mem/$1/projects/-Workspace-$2/memory/$3"
+}
+
+_mem_sync() {  # machine [push|pull]
+  CDOT_CLAUDE_DIR="$BATS_TMPDIR/mem/$1" CDOT_OPENCODE_CONFIG="/dev/null/nonexistent" \
+    "_cdot_${2:-push}" >/dev/null 2>&1
+}
+
+@test "memory: synced on main, conversations and session folders are not" {
+  rm -rf "$BATS_TMPDIR/mem"
+  _mem_machine a
+  local dir="$BATS_TMPDIR/mem/a"
+  _mem_note a proj MEMORY.md "- [Rule](rule.md) — x"
+  mkdir -p "$dir/projects/-Workspace-proj/abc-session/subagents"
+  echo '{}' > "$dir/projects/-Workspace-proj/abc.jsonl"
+  echo '{}' > "$dir/projects/-Workspace-proj/abc-session/subagents/x.jsonl"
+  _mem_sync a
+  run git -C "$BATS_TMPDIR/mem/remote.git" ls-tree -r --name-only main
+  [[ "$output" == *"projects/-Workspace-proj/memory/MEMORY.md"* ]]
+  [[ "$output" == *".gitattributes"* ]]
+  [[ "$output" != *".jsonl"* ]]
+}
+
+@test "memory: an older sync repo gets the memory lines on its next push" {
+  rm -rf "$BATS_TMPDIR/mem"
+  _mem_machine a
+  local dir="$BATS_TMPDIR/mem/a"
+  printf '*\n!.gitignore\n!skills/\n!skills/**\n' > "$dir/.gitignore"
+  rm -f "$dir/.gitattributes"
+  _mem_note a proj note.md "x"
+  _mem_sync a
+  grep -qx '!projects/\*/memory/\*\*' "$dir/.gitignore"
+  grep -qx 'projects/\*/memory/\*\* merge=union' "$dir/.gitattributes"
+  [ -n "$(git -C "$dir" ls-files projects/-Workspace-proj/memory/note.md)" ]
+}
+
+@test "memory: notes written on another machine arrive on the next pull" {
+  rm -rf "$BATS_TMPDIR/mem"
+  _mem_machine a; _mem_machine b
+  _mem_note b proj handoff.md "build X next session"
+  _mem_sync b
+  _mem_sync a pull
+  grep -q "build X next session" "$BATS_TMPDIR/mem/a/projects/-Workspace-proj/memory/handoff.md"
+}
+
+@test "memory: two machines adding to MEMORY.md at once keep both lines" {
+  rm -rf "$BATS_TMPDIR/mem"
+  _mem_machine a
+  _mem_note a proj MEMORY.md "- [Base](base.md) — base"
+  _mem_sync a
+  _mem_machine b
+  _mem_note a proj MEMORY.md "- [From A](a.md) — a"
+  _mem_note b proj MEMORY.md "- [From B](b.md) — b"
+  _mem_sync a
+  _mem_sync b
+  local idx="$BATS_TMPDIR/mem/b/projects/-Workspace-proj/memory/MEMORY.md"
+  grep -q "From A" "$idx"
+  grep -q "From B" "$idx"
+  [ ! -d "$BATS_TMPDIR/mem/b/.git/rebase-merge" ]
+}
+
+@test "memory: a file changed on two machines keeps both versions and is reported" {
+  rm -rf "$BATS_TMPDIR/mem"
+  _mem_machine a
+  _mem_note a proj fact.md "---"
+  _mem_sync a
+  _mem_machine b
+  _mem_note a proj fact.md "name: fact-a"
+  _mem_note b proj fact.md "name: fact-b"
+  _mem_sync a
+  run env CDOT_CLAUDE_DIR="$BATS_TMPDIR/mem/b" CDOT_OPENCODE_CONFIG=/dev/null/x \
+    bash -c "source '$CDOT_SH'; _cdot_push"
+  [[ "$output" == *"both versions kept"* ]]
+  [[ "$output" == *"projects/-Workspace-proj/memory/fact.md"* ]]
+}
+
+@test "memory wipe: deletes a project's memory here and, at the next pull, everywhere" {
+  rm -rf "$BATS_TMPDIR/mem"
+  _mem_machine a; _mem_machine b
+  _mem_note a proj note.md "x"
+  _mem_note a other keep.md "y"
+  _mem_sync a
+  _mem_sync b pull
+  [ -f "$BATS_TMPDIR/mem/b/projects/-Workspace-proj/memory/note.md" ]
+  run bash -c "export CDOT_CLAUDE_DIR='$BATS_TMPDIR/mem/a' CDOT_OPENCODE_CONFIG=/dev/null/x
+    source '$CDOT_SH'; echo y | _cdot_memory wipe proj"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"2 files"* || "$output" == *"1 files"* ]]
+  [ ! -f "$BATS_TMPDIR/mem/a/projects/-Workspace-proj/memory/note.md" ]
+  _mem_sync b pull
+  [ ! -f "$BATS_TMPDIR/mem/b/projects/-Workspace-proj/memory/note.md" ]
+  [ -f "$BATS_TMPDIR/mem/b/projects/-Workspace-other/memory/keep.md" ]
+}
+
+@test "memory wipe: anything but y keeps the memory" {
+  rm -rf "$BATS_TMPDIR/mem"
+  _mem_machine a
+  _mem_note a proj note.md "x"
+  run bash -c "export CDOT_CLAUDE_DIR='$BATS_TMPDIR/mem/a'
+    source '$CDOT_SH'; echo n | _cdot_memory wipe proj"
+  [[ "$output" == *"Aborted."* ]]
+  [ -f "$BATS_TMPDIR/mem/a/projects/-Workspace-proj/memory/note.md" ]
+}
+
+@test "memory: per-project warning names the project over the limit" {
+  local dir="$BATS_TMPDIR/memsize"
+  rm -rf "$dir"; mkdir -p "$dir/projects/-Workspace-big/memory" "$dir/projects/-Workspace-small/memory"
+  head -c 3000 /dev/zero | tr '\0' x > "$dir/projects/-Workspace-big/memory/a.md"
+  echo x > "$dir/projects/-Workspace-small/memory/a.md"
+  CDOT_CLAUDE_DIR="$dir" CDOT_MEMORY_WARN_KB=2 run _cdot_memory_size_check
+  [[ "$output" == *"big: 3 KB, 1 files"* ]]
+  [[ "$output" != *"small"* ]]
+  [[ "$output" != *"All project memory"* ]]   # 4 KB total, limit 2 projects × 2 KB
+}
+
+@test "memory: combined warning when all projects together pass projects × limit" {
+  local dir="$BATS_TMPDIR/memsize"
+  rm -rf "$dir"
+  for p in a b; do
+    mkdir -p "$dir/projects/-Workspace-$p/memory"
+    head -c 2500 /dev/zero | tr '\0' x > "$dir/projects/-Workspace-$p/memory/n.md"
+  done
+  CDOT_CLAUDE_DIR="$dir" CDOT_MEMORY_WARN_KB=2 run _cdot_memory_size_check
+  [[ "$output" == *"All project memory together is 6 KB (threshold: 4 KB)"* ]]
+  CDOT_CLAUDE_DIR="$dir" CDOT_MEMORY_WARN_KB=2 CDOT_MEMORY_TOTAL_WARN_KB=10 run _cdot_memory_size_check
+  [[ "$output" != *"All project memory"* ]]
+}
+
+@test "memory: history branches leave memory out, both ways" {
+  rm -rf "$BATS_TMPDIR/mem"
+  _mem_machine a
+  local dir="$BATS_TMPDIR/mem/a" branch
+  branch=$(_cdot_history_branch proj)
+  _mem_note a proj note.md "old"
+  echo '{}' > "$dir/projects/-Workspace-proj/s.jsonl"
+  # opt in: the branch exists on the remote
+  git -C "$dir" push -q origin "HEAD:refs/heads/$branch"
+  git -C "$dir" fetch -q origin "refs/heads/$branch:refs/remotes/origin/$branch"
+  CDOT_CLAUDE_DIR="$dir" _cdot_push_history proj >/dev/null
+  run git -C "$dir" ls-tree -r --name-only "refs/remotes/origin/$branch"
+  [[ "$output" == *"s.jsonl"* ]]
+  [[ "$output" != *"memory/note.md"* ]]
+  # a branch that still carries an old memory copy must not overwrite notes
+  local tree commit
+  git -C "$dir" update-ref -d "refs/remotes/origin/$branch"
+  printf 'old copy\n' > "$BATS_TMPDIR/oldnote"
+  tree=$(cd "$dir" && blob=$(git hash-object -w "$BATS_TMPDIR/oldnote") \
+    && printf '100644 blob %s\tprojects/-Workspace-proj/memory/note.md\n' "$blob" \
+    | GIT_INDEX_FILE="$BATS_TMPDIR/idx" git update-index --index-info \
+    && GIT_INDEX_FILE="$BATS_TMPDIR/idx" git write-tree)
+  rm -f "$BATS_TMPDIR/idx"
+  commit=$(git -C "$dir" commit-tree "$tree" -m old)
+  git -C "$dir" push -q -f origin "$commit:refs/heads/$branch"
+  echo "new" > "$dir/projects/-Workspace-proj/memory/note.md"
+  CDOT_CLAUDE_DIR="$dir" _cdot_pull_history proj >/dev/null
+  [ "$(cat "$dir/projects/-Workspace-proj/memory/note.md")" = "new" ]
+}
+
+@test "cdot _complete memory: offers wipe, then projects with memory" {
+  local dir="$BATS_TMPDIR/memcomp"
+  rm -rf "$dir"; mkdir -p "$dir/projects/-Workspace-alpha/memory" "$dir/projects/-Workspace-empty/memory"
+  echo x > "$dir/projects/-Workspace-alpha/memory/a.md"
+  run _cdot_complete memory
+  [ "$output" = "wipe" ]
+  CDOT_CLAUDE_DIR="$dir" run _cdot_complete memory wipe
+  [ "$output" = "alpha" ]
 }

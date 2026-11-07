@@ -72,6 +72,10 @@ Usage:
   cdot compact       Squash current project's history to one commit
   cdot prune         Remove old/oversized history branches (--all: all projects)
 
+Memory (Claude's notes per project, shared by all machines):
+  cdot memory        Show memory size per project
+  cdot memory wipe   Delete a project's memory on every machine
+
 Maintenance:
   cdot config        Set or remove sync remote (interactive)
   cdot doctor        Run environment diagnostics
@@ -103,6 +107,8 @@ unset _CDOT_CONFIG
 CDOT_CLAUDE_DIR="${CDOT_CLAUDE_DIR:-$HOME/.claude}"
 CDOT_OPENCODE_CONFIG="${CDOT_OPENCODE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json}"
 CDOT_SYNC_SIZE_WARN_MB="${CDOT_SYNC_SIZE_WARN_MB:-500}"
+CDOT_MEMORY_WARN_KB="${CDOT_MEMORY_WARN_KB:-64}"
+CDOT_MEMORY_TOTAL_WARN_KB="${CDOT_MEMORY_TOTAL_WARN_KB:-}"
 
 _CDOT_VERSION="dev"
 if [[ "$_CDOT_VERSION" == "dev" ]]; then
@@ -258,6 +264,7 @@ _cdot_pull() {
 
   # Exclude and warn about any symlinks that arrived from the remote
   _cdot_exclude_symlinks
+  _cdot_memory_merged_check
 
   _cdot_install_opencode
 }
@@ -317,6 +324,9 @@ _cdot_push() {
     echo "plugins/synced/" >> "$dir/.gitignore"
   fi
 
+  # Self-heal: sync project memory in repos that pre-date it
+  _cdot_memory_heal
+
   # Bail if a rebase is in progress (unresolved conflict from a prior sync)
   if [[ -d "$dir/.git/rebase-merge" || -d "$dir/.git/rebase-apply" ]]; then
     echo "⚠  Rebase in progress in $dir — resolve conflicts before syncing."
@@ -348,7 +358,10 @@ _cdot_push() {
     git -C "$dir" pull --rebase 2>&1 \
       || { echo "⚠  Sync conflict — resolve manually, then run 'cdot' again."; return 1; }
     _cdot_exclude_symlinks
+    _cdot_memory_merged_check
   fi
+
+  _cdot_memory_size_check
 
   if git -C "$dir" push; then
     return 0
@@ -358,14 +371,16 @@ _cdot_push() {
   echo "   Retry manually: git -C \"$dir\" push"
 }
 
-# Allowlist for main branch — config only. projects/ is handled via per-project
-# history branches and is intentionally excluded here.
-# Overwritten if the old format (containing !projects/) is detected (migration).
+# Allowlist for main branch — config plus each project's memory folder
+# (_cdot_memory_heal). Conversations stay on the per-project history branches.
+# Overwritten if the old format (all of projects/: "!projects/**") is detected
+# (migration).
 _cdot_write_gitignore() {
   local dir="$1"
   if [[ -f "$dir/.gitignore" ]] \
-      && ! grep -q "^!projects/" "$dir/.gitignore" 2>/dev/null \
+      && ! grep -qx '!projects/\*\*' "$dir/.gitignore" 2>/dev/null \
       && grep -q "^!skills/" "$dir/.gitignore" 2>/dev/null; then
+    CDOT_CLAUDE_DIR="$dir" _cdot_memory_heal
     return 0
   fi
   cat > "$dir/.gitignore" <<'EOF'
@@ -403,6 +418,7 @@ plugins/synced/
 # opencode config (synced alongside Claude config)
 !opencode.json
 EOF
+  CDOT_CLAUDE_DIR="$dir" _cdot_memory_heal
 }
 
 _cdot_init() {
@@ -614,8 +630,9 @@ _cdot_pull_history() {
 
   echo "Pulling history for '$name'..."
   # Extract directly to working tree — does not touch main's index
+  # memory/ comes from main, never from a history branch (older copies)
   git -C "$dir" archive "refs/remotes/origin/$branch" \
-    | tar -x -C "$dir" 2>/dev/null || true
+    | tar -x -C "$dir" --exclude='projects/*/memory' 2>/dev/null || true
 }
 
 _cdot_push_history() {
@@ -640,7 +657,9 @@ _cdot_push_history() {
   local tmp_index
   tmp_index=$(mktemp -u "$dir/.git/cdot-history-index.XXXXXX")
   trap "rm -f '$tmp_index'" RETURN
-  GIT_INDEX_FILE="$tmp_index" git -C "$dir" add --force "projects/$project_dir/" 2>/dev/null || true
+  # memory/ syncs on main; a copy here would bring old notes back on pull
+  GIT_INDEX_FILE="$tmp_index" git -C "$dir" add --force "projects/$project_dir/" \
+    ":(exclude)projects/$project_dir/memory" 2>/dev/null || true
   local tree
   tree=$(GIT_INDEX_FILE="$tmp_index" git -C "$dir" write-tree 2>/dev/null || true)
   rm -f "$tmp_index"
@@ -693,6 +712,128 @@ _cdot_push_history() {
     fi
     return 1
   fi
+}
+
+# ---------------------------------------------------------
+# memory — projects/<dir>/memory/ on main, shared by all machines
+# ---------------------------------------------------------
+
+# Allowlist lines for memory, plus union merge: two machines adding notes at
+# the same time never stop a sync (MEMORY.md keeps both index lines).
+_cdot_memory_heal() {
+  local dir="$CDOT_CLAUDE_DIR"
+  [[ -f "$dir/.gitignore" ]] || return 0
+  if ! grep -qx '!projects/\*/memory/\*\*' "$dir/.gitignore"; then
+    cat >> "$dir/.gitignore" <<'EOF'
+
+# Claude's memory of each project (small, shared by all machines);
+# conversations stay on the per-machine history branches
+!projects/
+!projects/*/
+!projects/*/memory/
+!projects/*/memory/**
+!.gitattributes
+EOF
+  fi
+  grep -qx 'projects/\*/memory/\*\* merge=union' "$dir/.gitattributes" 2>/dev/null \
+    || echo 'projects/*/memory/** merge=union' >> "$dir/.gitattributes"
+}
+
+# Size of a memory folder's files in KB, rounded up.
+_cdot_memory_kb() {
+  local bytes
+  bytes=$(find "$1" -type f -exec cat {} + 2>/dev/null | wc -c | tr -d ' ')
+  echo $(( (${bytes:-0} + 1023) / 1024 ))
+}
+
+# One line per memory folder with files: "<KB> <files> <project dir>".
+_cdot_memory_sizes() {
+  local d n
+  for d in "$CDOT_CLAUDE_DIR"/projects/*/memory; do
+    [[ -d "$d" ]] || continue
+    n=$(find "$d" -type f | wc -l | tr -d ' ')
+    (( n > 0 )) || continue
+    printf '%s %s %s\n' "$(_cdot_memory_kb "$d")" "$n" "$(basename "$(dirname "$d")")"
+  done
+}
+
+# Warns about each project over CDOT_MEMORY_WARN_KB, and about all memory
+# together over CDOT_MEMORY_TOTAL_WARN_KB (default: projects × per-project).
+_cdot_memory_size_check() {
+  local per="${CDOT_MEMORY_WARN_KB:-64}" total=0 count=0 kb n p over="" limit
+  while read -r kb n p; do
+    [[ -n "$p" ]] || continue
+    total=$(( total + kb )); count=$(( count + 1 ))
+    if (( kb > per )); then
+      over+="   ${p#-Workspace-}: ${kb} KB, ${n} files"$'\n'
+    fi
+  done <<< "$(_cdot_memory_sizes)"
+  limit="${CDOT_MEMORY_TOTAL_WARN_KB:-$(( count * per ))}"
+  if [[ -n "$over" ]]; then
+    echo "⚠  Project memory over ${per} KB:"
+    printf '%s' "$over"
+    echo "   Ask Claude in that project to consolidate its memory, or: cdot memory wipe <project>"
+  fi
+  if (( count > 0 && total > limit )); then
+    echo "⚠  All project memory together is ${total} KB (threshold: ${limit} KB). See: cdot memory"
+  fi
+  return 0
+}
+
+# A memory file with two "name:" lines holds both machines' versions (union).
+_cdot_memory_merged_check() {
+  local f found=()
+  for f in "$CDOT_CLAUDE_DIR"/projects/*/memory/*.md; do
+    [[ -f "$f" && "$(basename "$f")" != MEMORY.md ]] || continue
+    (( $(grep -c '^name:' "$f") > 1 )) && found+=("${f#"$CDOT_CLAUDE_DIR"/}")
+  done
+  (( ${#found[@]} )) || return 0
+  echo "⚠  Memory changed on two machines at once — both versions kept in:"
+  printf '   %s\n' "${found[@]}"
+  echo "   Ask Claude in that project to tidy these files."
+}
+
+_cdot_memory_list() {
+  local sizes kb n p
+  sizes=$(_cdot_memory_sizes)
+  if [[ -z "$sizes" ]]; then
+    echo "No project memory yet."
+    return 0
+  fi
+  printf '%8s %6s  %s\n' "SIZE" "FILES" "PROJECT"
+  while read -r kb n p; do
+    printf '%5s KB %6s  %s\n' "$kb" "$n" "${p#-Workspace-}"
+  done <<< "$(sort -rn <<< "$sizes")"
+  echo
+  _cdot_memory_size_check
+}
+
+# Deletes a project's memory here, and on every other machine at its next sync.
+_cdot_memory_wipe() {
+  local name="$1" d n reply
+  d="$CDOT_CLAUDE_DIR/projects/$(_cdot_project_dir "$name")/memory"
+  n=$(find "$d" -type f 2>/dev/null | wc -l | tr -d ' ')
+  if (( n == 0 )); then
+    echo "No memory for '$name'."
+    return 0
+  fi
+  echo "Delete Claude's memory of '$name' ($n files, $(_cdot_memory_kb "$d") KB)"
+  echo "on this machine and, at their next sync, on every other machine?"
+  printf "Continue? [y/N] "
+  read -r reply
+  [[ "$reply" =~ ^[Yy]$ ]] || { echo "Aborted."; return 0; }
+  find "$d" -mindepth 1 -delete
+  echo "✔ Memory of '$name' deleted."
+  [[ -d "$CDOT_CLAUDE_DIR/.git" ]] && _cdot_push
+  return 0
+}
+
+_cdot_memory() {
+  case "${1:-}" in
+    "")   _cdot_memory_list ;;
+    wipe) _cdot_memory_wipe "${2:-$(_cdot_name)}" ;;
+    *)    echo "Usage: cdot memory [wipe [<project>]]"; return 1 ;;
+  esac
 }
 
 # opencode config sync — thin wrappers over _cdot_pull/_cdot_push.
@@ -1451,6 +1592,7 @@ cdot() {
     compact)  _cdot_compact "$name" ;;
     prune)    _cdot_prune "$name" "${@:2}" ;;
     list)     _cdot_list ;;
+    memory)   _cdot_memory "${@:2}" ;;
     doctor)   _cdot_doctor ;;
 
     version)
@@ -1527,6 +1669,16 @@ _cdot_list_all_project_names() {
     | sort -u
 }
 
+# Projects with memory on this machine (for `cdot memory wipe`).
+_cdot_list_memory_names() {
+  local d
+  for d in "$CDOT_CLAUDE_DIR"/projects/-Workspace-*/memory; do
+    [[ -n "$(ls -A "$d" 2>/dev/null)" ]] || continue
+    d=$(basename "$(dirname "$d")")
+    echo "${d#-Workspace-}"
+  done
+}
+
 # Machines other than this one with synced history (for `cdot read`).
 _cdot_list_other_machines() {
   local dir="$CDOT_CLAUDE_DIR" machine
@@ -1554,7 +1706,9 @@ _cdot_list_machine_projects() {
 _cdot_complete() {
   local IFS=' '  # "$*" below joins with spaces, also when called with a newline IFS
   case "$*" in
-    "")       printf '%s\n' list read add remove delete compact prune config doctor version help ;;
+    "")       printf '%s\n' list read add remove delete compact prune memory config doctor version help ;;
+    memory)   echo wipe ;;
+    "memory wipe") _cdot_list_memory_names ;;
     remove)   _cdot_list_opted_in_names ;;
     delete)   _cdot_list_all_project_names ;;
     read)     _cdot_list_other_machines ;;
