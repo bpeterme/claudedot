@@ -7,6 +7,46 @@
 # Or source this file in .bashrc or .zshrc:
 #   source /path/to/claudedot/cdot.sh
 
+# ---------------------------------------------------------
+# shell completion and the sourced install
+# ---------------------------------------------------------
+
+# Completion asks `cdot _complete` (see _cdot_complete), so it needs nothing
+# else from this file.
+if [[ -n "${ZSH_VERSION:-}" ]]; then
+  # zsh code: $words and $CURRENT are set by the completion system; the
+  # unquoted $(…) splits at newlines (IFS) and drops empty lines; compadd -a
+  # reads the array by name.
+  # shellcheck disable=SC2034,SC2154,SC2207
+  _cdot_zsh_complete() {
+    local IFS=$'\n'
+    local -a candidates
+    candidates=($(cdot _complete "${words[@]:1:$((CURRENT - 2))}" 2>/dev/null))
+    compadd -a candidates
+  }
+  (( ${+functions[compdef]} )) && compdef _cdot_zsh_complete cdot
+elif [[ -n "${BASH_VERSION:-}" ]]; then
+  # COMPREPLY=( $(compgen …) ) is bash's completion idiom (macOS's bash 3.2 has
+  # no mapfile); IFS splits the candidates at newlines only.
+  # shellcheck disable=SC2207
+  _cdot_bash_complete() {
+    local IFS=$'\n'
+    COMPREPLY=( $(compgen -W "$(cdot _complete "${COMP_WORDS[@]:1:COMP_CWORD-1}" 2>/dev/null)" \
+      -- "${COMP_WORDS[COMP_CWORD]}") )
+  }
+  complete -F _cdot_bash_complete cdot
+fi
+
+# Sourced into an interactive shell (`source cdot.sh` in ~/.zshrc or
+# ~/.bashrc): define only `cdot`, which runs this file as a program — as the
+# Homebrew install does — and the completion above. Nothing from the config
+# file or cdot's internals lands in the shell. ($0 is the sourced file in zsh.)
+if [[ $- == *i* ]] && { [[ "${ZSH_EVAL_CONTEXT:-}" == *:file* ]] ||
+    [[ -n "${BASH_VERSION:-}" && "${BASH_SOURCE[0]}" != "$0" ]]; }; then
+  eval "cdot() { bash $(printf %q "$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/$(basename "${BASH_SOURCE[0]:-$0}")") \"\$@\"; }"
+  return 0
+fi
+
 # =========================================================
 # cdot - Claude Environment Sync
 # =========================================================
@@ -1443,6 +1483,7 @@ cdot() {
 
     # Plumbing: called by cbox, not shown in help
     _api-version)            echo "2" ;;
+    _complete)               shift; _cdot_complete "$@" ;;
     _pull)                   _cdot_pull ;;
     _push)                   _cdot_push ;;
     _pull-history)           _cdot_pull_history "${2:-}" ;;
@@ -1486,51 +1527,50 @@ _cdot_list_all_project_names() {
     | sort -u
 }
 
-if [[ -n "${ZSH_VERSION:-}" ]]; then
-  _cdot_zsh_complete() {
-    case $CURRENT in
-      2)
-        compadd list read add remove delete compact prune config doctor version help
-        ;;
-      3)
-        local -a projects
-        case "${words[2]}" in
-          remove)
-            projects=($(_cdot_list_opted_in_names))
-            (( ${#projects[@]} )) && compadd -a projects
-            ;;
-          delete)
-            projects=($(_cdot_list_all_project_names))
-            (( ${#projects[@]} )) && compadd -a projects
-            ;;
-        esac
-        ;;
-    esac
-  }
-  (( ${+functions[compdef]} )) && compdef _cdot_zsh_complete cdot
-elif [[ -n "${BASH_VERSION:-}" ]]; then
-  _cdot_bash_complete() {
-    local cur="${COMP_WORDS[COMP_CWORD]}"
-    local prev="${COMP_WORDS[COMP_CWORD-1]}"
-    COMPREPLY=()
+# Machines other than this one with synced history (for `cdot read`).
+_cdot_list_other_machines() {
+  local dir="$CDOT_CLAUDE_DIR" machine
+  [[ -d "$dir/.git" ]] || return 0
+  machine=$(_cdot_machine_id)
+  git -C "$dir" branch -r 2>/dev/null \
+    | sed -n 's|.*origin/history/[^/]*/\(.*\)$|\1|p' \
+    | grep -vx "$machine" \
+    | sort -u || true
+}
 
-    if [[ $COMP_CWORD -eq 1 ]]; then
-      COMPREPLY=( $(compgen -W \
-        "list read add remove delete compact prune config doctor version help" \
-        -- "$cur") )
-    elif [[ $COMP_CWORD -eq 2 ]]; then
-      case "$prev" in
-        remove)
-          COMPREPLY=( $(compgen -W "$(_cdot_list_opted_in_names)" -- "$cur") )
-          ;;
-        delete)
-          COMPREPLY=( $(compgen -W "$(_cdot_list_all_project_names)" -- "$cur") )
-          ;;
+# Projects with synced history from machine $1.
+_cdot_list_machine_projects() {
+  local dir="$CDOT_CLAUDE_DIR"
+  [[ -d "$dir/.git" ]] || return 0
+  git -C "$dir" branch -r 2>/dev/null \
+    | sed -n "s|.*origin/history/\\([^/]*\\)/$1\$|\\1|p" \
+    | sort -u || true
+}
+
+# `cdot _complete WORD...`: the candidates for the word after `cdot WORD...`,
+# one per line. Every completion script (completions/_cdot for Homebrew, and
+# the zsh and bash ones below for a sourced cdot.sh) asks this, so none can
+# drift from the commands, and project names come from cdot's own config.
+_cdot_complete() {
+  local IFS=' '  # "$*" below joins with spaces, also when called with a newline IFS
+  case "$*" in
+    "")       printf '%s\n' list read add remove delete compact prune config doctor version help ;;
+    remove)   _cdot_list_opted_in_names ;;
+    delete)   _cdot_list_all_project_names ;;
+    read)     _cdot_list_other_machines ;;
+    "read "*)
+      if (( $# == 2 )); then _cdot_list_machine_projects "$2"; fi
+      ;;
+    prune|"prune "*)
+      case "${!#}" in
+        --older-than|--over) ;;  # a value comes next
+        *) printf '%s\n' --older-than --over --all --force ;;
       esac
-    fi
-  }
-  complete -F _cdot_bash_complete cdot
-fi
+      ;;
+  esac
+  return 0
+}
+
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   set -euo pipefail

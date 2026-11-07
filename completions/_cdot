@@ -1,41 +1,13 @@
 #compdef cdot
 
+# The candidates come from cdot itself (`cdot _complete`), so they always
+# match its commands, and project names come from its own configuration —
+# nothing from cdot.env lands in the interactive shell.
 _cdot() {
-  local dir machine
-  local -a projects
-
-  case $CURRENT in
-    2)
-      compadd list read add remove delete compact prune config doctor version help
-      ;;
-    3)
-      # Only CDOT_CLAUDE_DIR is needed from cdot.env (the same file cdot
-      # reads, cdot.sh: _CDOT_CONFIG). Read in a subshell, so nothing else
-      # from it lands in the interactive shell.
-      dir=$(
-        cfg="${XDG_CONFIG_HOME:-$HOME/.config}/claudedot/cdot.env"
-        [[ -f "$cfg" ]] && source "$cfg" >/dev/null 2>&1
-        print -r -- "${CDOT_CLAUDE_DIR:-$HOME/.claude}"
-      )
-      machine="${USER}@$(hostname -s 2>/dev/null)"
-      case "${words[2]}" in
-        remove)
-          projects=($(git -C "$dir" branch -r 2>/dev/null \
-            | grep "origin/history/" \
-            | grep "/${machine}$" \
-            | sed "s|.*origin/history/\([^/]*\)/${machine}\$|\1|"))
-          (( ${#projects[@]} )) && compadd -a projects
-          ;;
-        delete)
-          projects=($(git -C "$dir" branch -r 2>/dev/null \
-            | grep "origin/history/" \
-            | sed 's|.*origin/history/\([^/]*\)/.*|\1|' \
-            | sort -u))
-          (( ${#projects[@]} )) && compadd -a projects
-          ;;
-      esac
-      ;;
-  esac
+  local IFS=$'\n'
+  local -a candidates
+  candidates=($(cdot _complete "${words[@]:1:$((CURRENT - 2))}" 2>/dev/null))
+  compadd -a candidates
 }
 
 _cdot "$@"

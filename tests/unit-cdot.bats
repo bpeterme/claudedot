@@ -654,7 +654,11 @@ _complete_cdot() {
   git -C "$t/claude" update-ref refs/remotes/origin/history/projA/me@host HEAD
   git -C "$t/claude" update-ref refs/remotes/origin/history/projB/other@box HEAD
   printf 'CDOT_CLAUDE_DIR=%s\nLEAKME=1\n' "$t/claude" > "$t/xdg/claudedot/cdot.env"
-  env -u CDOT_CLAUDE_DIR XDG_CONFIG_HOME="$t/xdg" zsh -f -c '
+  # A `cdot` executable on PATH, as Homebrew installs it, with this cdot.sh.
+  mkdir -p "$t/bin"
+  printf '#!/usr/bin/env bash\nexec bash %q "$@"\n' "$CDOT_SH" > "$t/bin/cdot"
+  chmod +x "$t/bin/cdot"
+  env -u CDOT_CLAUDE_DIR PATH="$t/bin:$PATH" XDG_CONFIG_HOME="$t/xdg" zsh -f -c '
     compadd() { [[ $1 == -a ]] && print -l -- "${(@P)2}" || print -l -- "$@"; }
     source "$1" >/dev/null 2>&1
     words=(cdot "$2"); CURRENT=3; _cdot
@@ -673,4 +677,57 @@ _complete_cdot() {
   command -v zsh >/dev/null || skip "zsh not installed"
   run _complete_cdot delete
   [[ "$output" == *"leaked: LEAKME=unset CDOT_CLAUDE_DIR=unset"* ]]
+}
+
+@test "_cdot_complete: offers every command the dispatcher handles" {
+  run _cdot_complete
+  local cmd
+  for cmd in $(awk '/^cdot\(\) \{/{f=1} f && /^    [a-z|-]+\)/{s=$1; gsub(/\)/,"",s); gsub(/\|/," ",s); print s} f && /^}/{exit}' "$CDOT_SH"); do
+    [[ "$cmd" == cbox || "$cmd" == flux || "$cmd" == --help || "$cmd" == -h ]] && continue
+    [[ $'\n'"$output"$'\n' == *$'\n'"$cmd"$'\n'* ]] || { echo "missing: $cmd"; false; }
+  done
+}
+
+@test "_cdot_complete: read offers other machines, then their projects" {
+  _cdot_machine_id() { echo "me@here"; }
+  git init -q "$CDOT_CLAUDE_DIR"
+  git -C "$CDOT_CLAUDE_DIR" -c user.name=t -c user.email=t@t commit -q --allow-empty -m x
+  local b
+  for b in projA/me@here projA/you@there projB/you@there projC/them@far; do
+    git -C "$CDOT_CLAUDE_DIR" update-ref "refs/remotes/origin/history/$b" HEAD
+  done
+  [ "$(_cdot_complete read | tr '\n' ' ')" = "them@far you@there " ]
+  [ "$(_cdot_complete read you@there | tr '\n' ' ')" = "projA projB " ]
+  [ -z "$(_cdot_complete read you@there projA)" ]
+  [ "$(_cdot_complete remove)" = "projA" ]
+  rm -rf "$CDOT_CLAUDE_DIR/.git"
+}
+
+@test "_cdot_complete: prune offers its options, nothing where a value is due" {
+  [ "$(_cdot_complete prune | tr '\n' ' ')" = "--older-than --over --all --force " ]
+  [ -z "$(_cdot_complete prune --older-than)" ]
+  [ "$(_cdot_complete prune --older-than 30d | head -1)" = "--older-than" ]
+}
+
+@test "bash completion (sourced cdot.sh): several words, inherited newline IFS" {
+  run bash -c 'source "$1" >/dev/null 2>&1
+    COMP_WORDS=(cdot prune --a); COMP_CWORD=2; _cdot_bash_complete; printf "%s\n" "${COMPREPLY[@]}"' _ "$CDOT_SH"
+  [ "$status" -eq 0 ]
+  [ "$output" = "--all" ]
+}
+
+@test "sourced in an interactive shell: no config or internals leak, cdot still works" {
+  local sh xdg="$BATS_TMPDIR/src-xdg"
+  mkdir -p "$xdg/claudedot"
+  printf 'LEAKME=1\n' > "$xdg/claudedot/cdot.env"
+  for sh in bash zsh; do
+    command -v "$sh" >/dev/null || continue
+    run env -u CDOT_CLAUDE_DIR XDG_CONFIG_HOME="$xdg" "$sh" -i -c 'source "$1" 2>/dev/null
+      echo "LEAKME=${LEAKME-unset} DIR=${CDOT_CLAUDE_DIR-unset}"
+      typeset -f _cdot_push >/dev/null 2>&1 && echo "internals leaked"
+      cdot version' _ "$CDOT_SH"
+    [[ "$output" == *"LEAKME=unset DIR=unset"* ]] || { echo "$sh: $output"; false; }
+    [[ "$output" != *"internals leaked"* ]] || { echo "$sh: $output"; false; }
+    [[ "$output" == *"cdot "* ]] || { echo "$sh: $output"; false; }
+  done
 }
