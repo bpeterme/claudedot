@@ -528,6 +528,7 @@ _setup_history_repo() {
 
 @test "_cdot_pull: copies opencode.json from CDOT_CLAUDE_DIR to CDOT_OPENCODE_CONFIG" {
   local dir="$BATS_TMPDIR/oc-synced"
+  rm -rf "$dir"  # a rerun in the same tmp dir would find opencode.json already committed
   mkdir -p "$dir"
   git -C "$dir" init 2>/dev/null
   git -C "$dir" config user.email "t@t.com"
@@ -635,4 +636,41 @@ _oc_repo() {
   [ -f "$dir/plugins/synced/abc/.marketplaces.json" ]
   [ -n "$(git -C "$dir" ls-files plugins/known_marketplaces.json)" ]
   grep -qx "plugins/synced/" "$dir/.gitignore"
+}
+
+# ---------------------------------------------------------------------------
+# zsh completion (completions/_cdot)
+# ---------------------------------------------------------------------------
+
+# Runs the completion for `cdot <word> <TAB>` in a clean zsh, with cdot.env in
+# $XDG_CONFIG_HOME pointing CDOT_CLAUDE_DIR at a repo with two history
+# branches. Prints the candidates, then which variables leaked into the shell.
+_complete_cdot() {
+  local t="$BATS_TMPDIR/comp" comp
+  comp="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/completions/_cdot"
+  rm -rf "$t"; mkdir -p "$t/xdg/claudedot"
+  git init -q "$t/claude"
+  git -C "$t/claude" -c user.name=t -c user.email=t@t commit -q --allow-empty -m x
+  git -C "$t/claude" update-ref refs/remotes/origin/history/projA/me@host HEAD
+  git -C "$t/claude" update-ref refs/remotes/origin/history/projB/other@box HEAD
+  printf 'CDOT_CLAUDE_DIR=%s\nLEAKME=1\n' "$t/claude" > "$t/xdg/claudedot/cdot.env"
+  env -u CDOT_CLAUDE_DIR XDG_CONFIG_HOME="$t/xdg" zsh -f -c '
+    compadd() { [[ $1 == -a ]] && print -l -- "${(@P)2}" || print -l -- "$@"; }
+    source "$1" >/dev/null 2>&1
+    words=(cdot "$2"); CURRENT=3; _cdot
+    print "leaked: LEAKME=${LEAKME-unset} CDOT_CLAUDE_DIR=${CDOT_CLAUDE_DIR-unset}"' _ "$comp" "$1"
+}
+
+@test "zsh completion: lists projects from CDOT_CLAUDE_DIR in \$XDG_CONFIG_HOME's cdot.env" {
+  command -v zsh >/dev/null || skip "zsh not installed"
+  run _complete_cdot delete
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "projA" ]
+  [ "${lines[1]}" = "projB" ]
+}
+
+@test "zsh completion: nothing from cdot.env leaks into the interactive shell" {
+  command -v zsh >/dev/null || skip "zsh not installed"
+  run _complete_cdot delete
+  [[ "$output" == *"leaked: LEAKME=unset CDOT_CLAUDE_DIR=unset"* ]]
 }

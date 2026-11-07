@@ -1,11 +1,7 @@
 #compdef cdot
 
 _cdot() {
-  # The same file cdot reads (cdot.sh: _CDOT_CONFIG).
-  local _cdot_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/claudedot/cdot.env"
-  [[ -f "$_cdot_cfg" ]] && source "$_cdot_cfg"
-  local dir="${CDOT_CLAUDE_DIR:-$HOME/.claude}"
-  local machine="${USER}@$(hostname -s 2>/dev/null)"
+  local dir machine
   local -a projects
 
   case $CURRENT in
@@ -13,6 +9,15 @@ _cdot() {
       compadd list read add remove delete compact prune config doctor version help
       ;;
     3)
+      # Only CDOT_CLAUDE_DIR is needed from cdot.env (the same file cdot
+      # reads, cdot.sh: _CDOT_CONFIG). Read in a subshell, so nothing else
+      # from it lands in the interactive shell.
+      dir=$(
+        cfg="${XDG_CONFIG_HOME:-$HOME/.config}/claudedot/cdot.env"
+        [[ -f "$cfg" ]] && source "$cfg" >/dev/null 2>&1
+        print -r -- "${CDOT_CLAUDE_DIR:-$HOME/.claude}"
+      )
+      machine="${USER}@$(hostname -s 2>/dev/null)"
       case "${words[2]}" in
         remove)
           projects=($(git -C "$dir" branch -r 2>/dev/null \
