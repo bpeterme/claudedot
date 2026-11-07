@@ -70,6 +70,13 @@ cdot           # push history for the first time
 | `cdot compact` | Squash current project's history to a single commit |
 | `cdot prune` | Remove old or oversized history branches (`--all`: all projects on this machine) |
 
+**Project memory**
+
+| Command | Description |
+|---------|-------------|
+| `cdot memory` | Show the size of Claude's memory per project |
+| `cdot memory wipe [<project>]` | Delete a project's memory on this machine and, at their next sync, on all others |
+
 **Maintenance**
 
 | Command | Description |
@@ -97,6 +104,7 @@ Files synced by default:
 | `agents/**` | User-defined agents |
 | `output-styles/**` | Output style definitions |
 | `opencode.json` | opencode config (API keys, model settings) |
+| `projects/*/memory/**` | Claude's memory of each project (see below) |
 
 > [!CAUTION]
 > `opencode.json` may contain API keys in plain text. Ensure your sync remote is a **private** repository.
@@ -104,6 +112,15 @@ Files synced by default:
 > cdot installs the **committed** `opencode.json` on your machine, never the file in the sync folder: claudebox containers can write that folder, and opencode runs the commands its config names (MCP servers). On a machine without its own opencode config, a changed `opencode.json` in the sync folder is not synced; it is kept as `opencode.json.rejected`. Note that the sync folder, and so this file with its API keys, is readable inside claudebox containers.
 
 Symlinks are excluded from sync automatically. If a dangling symlink arrives from another machine, `cdot` warns and removes it from the index.
+
+### Project memory sync
+
+Claude Code keeps notes per project in `projects/<project>/memory/`: rules you gave it, decisions, and what is left to do. These sync on `main` for **every** project, with no opt-in, so a note written on one machine ("build X next session") is there when you start on another. Memory is small, typically a few KB to a few hundred KB per project.
+
+- Two machines adding notes at the same time never stop a sync: memory files merge with git's `union` driver, so `MEMORY.md` keeps both index lines. If the same note changed on both machines, both versions are kept and `cdot` names the file; ask Claude in that project to tidy it.
+- `cdot` warns when a project's memory is over `CDOT_MEMORY_WARN_KB`, and when all projects together pass `CDOT_MEMORY_TOTAL_WARN_KB` (default: number of projects × the per-project limit). Nothing is deleted automatically: whether a note is still relevant takes reading it, so ask Claude to consolidate, or start over with `cdot memory wipe`.
+- `cdot memory wipe` deletes a project's memory everywhere. A machine with a session open in that project at the time may report a sync conflict at its next sync.
+- Memory is never part of the per-machine history branches below, so an older copy there cannot bring wiped or outdated notes back.
 
 ### Project history sync
 
@@ -140,6 +157,8 @@ Create `~/.config/claudedot/cdot.env` to override defaults. See [`cdot.env.examp
 | `CDOT_CLAUDE_DIR` | `~/.claude` | Claude Code config directory to sync |
 | `CDOT_OPENCODE_CONFIG` | `~/.config/opencode/opencode.json` | opencode config file to sync (may contain API keys — keep your remote private) |
 | `CDOT_SYNC_SIZE_WARN_MB` | `500` | Warn when total history size across opted-in projects exceeds this threshold (MB) |
+| `CDOT_MEMORY_WARN_KB` | `64` | Warn when one project's memory exceeds this size (KB) |
+| `CDOT_MEMORY_TOTAL_WARN_KB` | projects × `CDOT_MEMORY_WARN_KB` | Warn when all project memory together exceeds this size (KB) |
 
 > [!WARNING]
 > **Do not place `CDOT_CLAUDE_DIR` (default `~/.claude`) on iCloud Drive, Dropbox Smart Sync, Google Drive Stream, or any on-demand cloud storage.** These services evict file contents to stubs when not recently accessed. A git operation on an evicted file produces a corrupt commit or silently reads the wrong content.
