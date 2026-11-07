@@ -1,8 +1,8 @@
 # claudedot
 
-A shell utility (`cdot`) that syncs your [Claude Code](https://github.com/anthropics/claude-code) config, [opencode](https://opencode.ai) config, and per-project conversation history across machines via a private git remote.
+A shell utility (`cdot`) that syncs your [Claude Code](https://github.com/anthropics/claude-code) config, [opencode](https://opencode.ai) config, Claude's memory of each project, and per-project conversation history across machines via a private git remote.
 
-Config files (settings, keybindings, global instructions) and opencode config sync automatically on every run. Project conversation history is opt-in per project and stored on isolated branches — it never touches the main branch. If [claudebox](https://github.com/bpeterme/claudebox) is installed, `cdot` runs automatically at session start and exit for both Claude Code and opencode sessions with no manual steps needed.
+Config files (settings, keybindings, global instructions), opencode config and Claude's project memory sync automatically on every run. Project conversation history is opt-in per project and stored on isolated branches — it never touches the main branch. If [claudebox](https://github.com/bpeterme/claudebox) is installed, `cdot` runs automatically at session start and exit for both Claude Code and opencode sessions with no manual steps needed.
 
 ## Prerequisites
 
