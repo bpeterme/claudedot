@@ -109,6 +109,7 @@ CDOT_OPENCODE_CONFIG="${CDOT_OPENCODE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/
 CDOT_SYNC_SIZE_WARN_MB="${CDOT_SYNC_SIZE_WARN_MB:-500}"
 CDOT_MEMORY_WARN_KB="${CDOT_MEMORY_WARN_KB:-64}"
 CDOT_MEMORY_TOTAL_WARN_KB="${CDOT_MEMORY_TOTAL_WARN_KB:-}"
+CDOT_WORKSPACE_DIRS="${CDOT_WORKSPACE_DIRS:-}"
 
 _CDOT_VERSION="dev"
 if [[ "$_CDOT_VERSION" == "dev" ]]; then
@@ -190,6 +191,22 @@ _cdot_name() {
 
 _cdot_project_dir() {
   echo "-Workspace-$1"
+}
+
+# Project names (formed like _cdot_name) of the folders directly inside the
+# CDOT_WORKSPACE_DIRS (colon-separated, like PATH), one per line.
+_cdot_workspace_projects() {
+  local IFS=: ws d n
+  for ws in $CDOT_WORKSPACE_DIRS; do
+    ws="${ws/#\~/$HOME}"
+    [[ -d "$ws" ]] || continue
+    for d in "$ws"/*/; do
+      [[ -d "$d" ]] || continue
+      n=$(basename "$d" | tr -cs '[:alnum:]' '-' | sed 's/^-*//;s/-*$//')
+      [[ -n "$n" ]] && printf '%s\n' "$n"
+    done
+  done
+  return 0
 }
 
 _cdot_machine_id() {
@@ -1463,10 +1480,12 @@ _cdot_list() {
   fi
 
   # ── history branches — read from local tracking refs (post-prune = remote) ──
+  # "|| true": grep finds nothing on a fresh setup, which under
+  # set -e / pipefail would end cdot before it says so.
   local all_branches
   all_branches=$(git -C "$dir" branch -r 2>/dev/null \
     | grep "origin/history/" \
-    | sed 's|.*origin/||;s/[[:space:]]//g')
+    | sed 's|.*origin/||;s/[[:space:]]//g') || true
 
   if [[ -z "$all_branches" ]]; then
     printf "\n  No projects opted into history sync. Use: cdot add\n\n"
@@ -1479,14 +1498,22 @@ _cdot_list() {
     | sed 's|history/\([^/]*\)/.*|\1|')
   local_projects=$(ls "$dir/projects/" 2>/dev/null \
     | grep "^-Workspace-" \
-    | sed 's/^-Workspace-//')
+    | sed 's/^-Workspace-//') || true
   all_projects=$(printf "%s\n%s" "$remote_projects" "$local_projects" | sort -u)
+
+  # With CDOT_WORKSPACE_DIRS set, this machine's section leaves out projects
+  # that have no folder there anymore. Unset: cdot cannot tell, shows all.
+  local present_projects=""
+  [[ -n "$CDOT_WORKSPACE_DIRS" ]] && present_projects=$(_cdot_workspace_projects)
+  _cdot_list_here() {
+    [[ -z "$CDOT_WORKSPACE_DIRS" ]] || grep -qxF -- "$1" <<<"$present_projects"
+  }
 
   # Projects opted in on this machine
   local this_machine_projects
   this_machine_projects=$(echo "$all_branches" \
     | grep "history/[^/]*/$this_machine$" \
-    | sed "s|history/\([^/]*\)/$this_machine\$|\1|")
+    | sed "s|history/\([^/]*\)/$this_machine\$|\1|") || true
 
   # Extract unique machines, current machine first
   local machines
@@ -1512,6 +1539,7 @@ _cdot_list() {
     while IFS= read -r branch; do
       local project="${branch#history/}"
       project="${project%/$machine}"
+      [[ "$machine" == "$this_machine" ]] && ! _cdot_list_here "$project" && continue
 
       # "add — " commit message = opted in but never synced real content yet
       local last_msg
@@ -1551,6 +1579,7 @@ _cdot_list() {
       while IFS= read -r project; do
         [[ -z "$project" ]] && continue
         echo "$this_machine_projects" | grep -qx "$project" && continue
+        _cdot_list_here "$project" || continue
         # shellcheck disable=SC2059
         printf "$_FMT_NOT_IN" "$project"
       done <<< "$all_projects"
