@@ -164,6 +164,12 @@ _cdot_relay() {
   local c='' l; [[ -n "${_CDOT_SPINNER_PID:-}" && -t 1 ]] && c=$'\r\033[K'
   while IFS= read -r l || [[ -n "$l" ]]; do printf '%s%s\n' "$c" "$l"; done
 }
+# A step's announcement: the spinner's label on a terminal (lower-cased,
+# like all labels), a plain line otherwise (scripts, logs).
+_cdot_step() {
+  _cdot_spin_start "$(printf '%s' "${1:0:1}" | tr '[:upper:]' '[:lower:]')${1:1}"
+  [[ -n "${_CDOT_SPINNER_PID:-}" ]] || echo "$1"
+}
 # echo for a line printed while the spinner runs (in this shell, not a pipe)
 _cdot_say() {
   local c=''; [[ -n "${_CDOT_SPINNER_PID:-}" && -t 1 ]] && c=$'\r\033[K'
@@ -998,8 +1004,7 @@ _cdot_delete() {
   [[ -n "$name" ]] || { echo "Usage: cdot delete <project>"; return 1; }
   clear
 
-  echo "Fetching remote refs..."
-  _cdot_spin_start "fetching remote refs..."
+  _cdot_step "Fetching remote refs..."
   git -C "$dir" fetch origin 2>/dev/null || true
 
   local branches
@@ -1107,8 +1112,7 @@ _cdot_prune() {
   fi
   clear
 
-  echo "Fetching remote refs..."
-  _cdot_spin_start "fetching remote refs..."
+  _cdot_step "Fetching remote refs..."
   git -C "$dir" fetch origin 2>/dev/null || true
 
   local host; host=$(_cdot_machine_id)
@@ -1260,8 +1264,7 @@ _cdot_read() {
 
   # ── Step 1: pick machine + project ─────────────────────────────────────────
   if [[ -z "$machine" || -z "$project_name" ]]; then
-    echo "Fetching remote refs..."
-    _cdot_spin_start "fetching remote refs..."
+    _cdot_step "Fetching remote refs..."
     git -C "$dir" fetch origin 2>/dev/null || true
 
     # Collect all history branches excluding current machine
@@ -1328,8 +1331,7 @@ _cdot_read() {
   local project_dir
   project_dir=$(_cdot_project_dir "$project_name")
 
-  _cdot_say "Loading conversation list..."
-  _cdot_spin_start "loading conversations..."
+  _cdot_step "Loading conversation list..."
   local -a raw_entries=()
   while IFS=$'\t' read -r size path <&3; do
     local head_data ts preview
@@ -1427,7 +1429,7 @@ _cdot_list() {
   [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
   clear
 
-  echo "Fetching remote refs..."
+  _cdot_step "Fetching remote refs..."
   # --prune removes stale local tracking refs so _cdot_is_opted_in stays accurate
   local _fetch_err
   if ! _fetch_err=$(git -C "$dir" fetch --prune origin 2>&1 >/dev/null); then
