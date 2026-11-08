@@ -109,6 +109,7 @@ CDOT_OPENCODE_CONFIG="${CDOT_OPENCODE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/
 CDOT_SYNC_SIZE_WARN_MB="${CDOT_SYNC_SIZE_WARN_MB:-500}"
 CDOT_MEMORY_WARN_KB="${CDOT_MEMORY_WARN_KB:-64}"
 CDOT_MEMORY_TOTAL_WARN_KB="${CDOT_MEMORY_TOTAL_WARN_KB:-}"
+CDOT_WORKSPACE_DIRS="${CDOT_WORKSPACE_DIRS:-}"
 
 _CDOT_VERSION="dev"
 if [[ "$_CDOT_VERSION" == "dev" ]]; then
@@ -121,6 +122,70 @@ fi
 # helpers
 # ---------------------------------------------------------
 
+# One spinner per command: _cdot_spin_start starts it (or, if it already
+# runs, only changes its label — also from a subshell); it keeps spinning
+# until _cdot_spin_stop. Everything printed meanwhile goes through
+# _cdot_relay, which clears the spinner line in the same write, so output
+# lands at column 0 and the spinner redraws below it. The frame sits in
+# column 0, where ✔/⚠ appear. The cursor is hidden while it spins.
+_CDOT_SPINNER_PID=""
+_CDOT_SPINNER_MSG=""
+_cdot_spin_start() {
+  local msg="${1:-syncing...}"
+  if [[ -n "${_CDOT_SPINNER_PID:-}" ]]; then
+    printf '%s\n' "$msg" > "$_CDOT_SPINNER_MSG"
+    return 0
+  fi
+  [[ -t 1 ]] || return 0
+  _CDOT_SPINNER_MSG=$(mktemp)
+  printf '%s\n' "$msg" > "$_CDOT_SPINNER_MSG"
+  printf '\033[?25l'
+  trap '_cdot_spin_stop' EXIT
+  ( local f=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) i=0 m="$msg"
+    while true; do
+      IFS= read -r m < "$_CDOT_SPINNER_MSG" 2>/dev/null || true
+      printf '\r\033[K%s %s' "${f[$i]}" "$m"
+      i=$(( (i+1) % 10 ))
+      sleep 0.1
+    done ) &
+  _CDOT_SPINNER_PID=$!
+}
+_cdot_spin_stop() {
+  [[ -n "${_CDOT_SPINNER_PID:-}" ]] || return 0
+  kill "$_CDOT_SPINNER_PID" 2>/dev/null || true
+  wait "$_CDOT_SPINNER_PID" 2>/dev/null || true
+  printf '\r\033[K\033[?25h'
+  rm -f "$_CDOT_SPINNER_MSG"
+  _CDOT_SPINNER_PID=""; _CDOT_SPINNER_MSG=""
+}
+# Pipe output through this while the spinner runs: each line clears the
+# spinner line first. Without a spinner it passes lines through.
+_cdot_relay() {
+  local c='' l; [[ -n "${_CDOT_SPINNER_PID:-}" && -t 1 ]] && c=$'\r\033[K'
+  while IFS= read -r l || [[ -n "$l" ]]; do printf '%s%s\n' "$c" "$l"; done
+}
+# A step's announcement: the spinner's label on a terminal (lower-cased,
+# like all labels), a plain line otherwise (scripts, logs).
+_cdot_step() {
+  _cdot_spin_start "$(printf '%s' "${1:0:1}" | tr '[:upper:]' '[:lower:]')${1:1}"
+  [[ -n "${_CDOT_SPINNER_PID:-}" ]] || echo "$1"
+}
+# echo for a line printed while the spinner runs (in this shell, not a pipe)
+_cdot_say() {
+  local c=''; [[ -n "${_CDOT_SPINNER_PID:-}" && -t 1 ]] && c=$'\r\033[K'
+  printf '%s%s\n' "$c" "$*"
+}
+# Runs a command that asks nothing under the spinner; its output prints
+# above it. Keeps the command's exit status.
+_cdot_spinning() {
+  local label="$1" rc; shift
+  _cdot_spin_start "$label"
+  "$@" 2>&1 | _cdot_relay
+  rc=${PIPESTATUS[0]}
+  _cdot_spin_stop
+  return "$rc"
+}
+
 _cdot_name() {
   local name
   name=$(basename "$PWD" \
@@ -132,6 +197,22 @@ _cdot_name() {
 
 _cdot_project_dir() {
   echo "-Workspace-$1"
+}
+
+# Project names (formed like _cdot_name) of the folders directly inside the
+# CDOT_WORKSPACE_DIRS (colon-separated, like PATH), one per line.
+_cdot_workspace_projects() {
+  local IFS=: ws d n
+  for ws in $CDOT_WORKSPACE_DIRS; do
+    ws="${ws/#\~/$HOME}"
+    [[ -d "$ws" ]] || continue
+    for d in "$ws"/*/; do
+      [[ -d "$d" ]] || continue
+      n=$(basename "$d" | tr -cs '[:alnum:]' '-' | sed 's/^-*//;s/-*$//')
+      [[ -n "$n" ]] && printf '%s\n' "$n"
+    done
+  done
+  return 0
 }
 
 _cdot_machine_id() {
@@ -923,12 +1004,13 @@ _cdot_delete() {
   [[ -n "$name" ]] || { echo "Usage: cdot delete <project>"; return 1; }
   clear
 
-  echo "Fetching remote refs..."
+  _cdot_step "Fetching remote refs..."
   git -C "$dir" fetch origin 2>/dev/null || true
 
   local branches
   branches=$(git -C "$dir" ls-remote --heads origin "history/$name/*" 2>/dev/null \
     | awk '{print $2}' | sed 's|refs/heads/||')
+  _cdot_spin_stop
 
   if [[ -z "$branches" ]]; then
     echo "No remote history found for '$name'."
@@ -941,15 +1023,17 @@ _cdot_delete() {
   read -r answer
   [[ "$answer" =~ ^[Yy]$ ]] || { echo "Aborted."; return 0; }
 
+  _cdot_spin_start "deleting history..."
   local failed=false
   while IFS= read -r branch; do
     if git -C "$dir" push origin --delete "$branch" 2>/dev/null; then
-      echo "✔ Deleted $branch"
+      _cdot_say "✔ Deleted $branch"
     else
-      echo "⚠  Could not delete $branch"
+      _cdot_say "⚠  Could not delete $branch"
       failed=true
     fi
   done <<< "$branches"
+  _cdot_spin_stop
 
   local this_branch
   this_branch=$(_cdot_history_branch "$name")
@@ -1028,7 +1112,7 @@ _cdot_prune() {
   fi
   clear
 
-  echo "Fetching remote refs..."
+  _cdot_step "Fetching remote refs..."
   git -C "$dir" fetch origin 2>/dev/null || true
 
   local host; host=$(_cdot_machine_id)
@@ -1047,6 +1131,7 @@ _cdot_prune() {
   fi
 
   if [[ ${#branches[@]} -eq 0 ]]; then
+    _cdot_spin_stop
     $all_projects && echo "No history branches found for this machine." \
       || echo "No history branch found for project '$name'. Run: cdot add"
     return 0
@@ -1080,6 +1165,7 @@ _cdot_prune() {
 
     $should_prune && candidates+=("$branch")
   done
+  _cdot_spin_stop
 
   if [[ ${#candidates[@]} -eq 0 ]]; then
     echo "No branches match the prune criteria."
@@ -1097,13 +1183,15 @@ _cdot_prune() {
     [[ "$reply" =~ ^[Yy]$ ]] || { echo "Aborted."; return 0; }
   fi
 
+  _cdot_spin_start "deleting history..."
   for branch in "${candidates[@]}"; do
     if git -C "$dir" push origin --delete "$branch" 2>/dev/null; then
-      echo "✔ Deleted $branch"
+      _cdot_say "✔ Deleted $branch"
     else
-      echo "⚠  Failed to delete $branch"
+      _cdot_say "⚠  Failed to delete $branch"
     fi
   done
+  _cdot_spin_stop
 }
 
 # ---------------------------------------------------------
@@ -1176,7 +1264,7 @@ _cdot_read() {
 
   # ── Step 1: pick machine + project ─────────────────────────────────────────
   if [[ -z "$machine" || -z "$project_name" ]]; then
-    echo "Fetching remote refs..."
+    _cdot_step "Fetching remote refs..."
     git -C "$dir" fetch origin 2>/dev/null || true
 
     # Collect all history branches excluding current machine
@@ -1198,6 +1286,7 @@ _cdot_read() {
       | grep "origin/history/" \
       | sed 's|.*origin/history/||;s/[[:space:]]//g' \
       | sort)
+    _cdot_spin_stop
 
     if [[ ${#combo_machine[@]} -eq 0 ]]; then
       [[ -n "$machine" ]] \
@@ -1230,9 +1319,11 @@ _cdot_read() {
 
   # ── Step 2: list conversations for machine + project ─────────────────────────
   local branch="history/$project_name/$machine"
+  _cdot_spin_start "fetching history..."
   git -C "$dir" fetch origin "refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || true
 
   if ! git -C "$dir" rev-parse --verify "refs/remotes/origin/$branch" >/dev/null 2>&1; then
+    _cdot_spin_stop
     echo "No history found for '$machine' / '$project_name'."
     return 1
   fi
@@ -1240,7 +1331,7 @@ _cdot_read() {
   local project_dir
   project_dir=$(_cdot_project_dir "$project_name")
 
-  echo "Loading conversation list..."
+  _cdot_step "Loading conversation list..."
   local -a raw_entries=()
   while IFS=$'\t' read -r size path <&3; do
     local head_data ts preview
@@ -1274,6 +1365,7 @@ for line in sys.stdin:
   done 3< <(git -C "$dir" ls-tree -l "refs/remotes/origin/$branch" \
     -- "projects/$project_dir/" 2>/dev/null \
     | awk '$2=="blob" && $NF ~ /\.jsonl$/ {print $4"\t"$NF}')
+  _cdot_spin_stop
 
   if [[ ${#raw_entries[@]} -eq 0 ]]; then
     echo "No conversations found for '$project_name' on '$machine'."
@@ -1337,7 +1429,7 @@ _cdot_list() {
   [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
   clear
 
-  echo "Fetching remote refs..."
+  _cdot_step "Fetching remote refs..."
   # --prune removes stale local tracking refs so _cdot_is_opted_in stays accurate
   local _fetch_err
   if ! _fetch_err=$(git -C "$dir" fetch --prune origin 2>&1 >/dev/null); then
@@ -1390,10 +1482,12 @@ _cdot_list() {
   fi
 
   # ── history branches — read from local tracking refs (post-prune = remote) ──
+  # "|| true": grep finds nothing on a fresh setup, which under
+  # set -e / pipefail would end cdot before it says so.
   local all_branches
   all_branches=$(git -C "$dir" branch -r 2>/dev/null \
     | grep "origin/history/" \
-    | sed 's|.*origin/||;s/[[:space:]]//g')
+    | sed 's|.*origin/||;s/[[:space:]]//g') || true
 
   if [[ -z "$all_branches" ]]; then
     printf "\n  No projects opted into history sync. Use: cdot add\n\n"
@@ -1406,14 +1500,22 @@ _cdot_list() {
     | sed 's|history/\([^/]*\)/.*|\1|')
   local_projects=$(ls "$dir/projects/" 2>/dev/null \
     | grep "^-Workspace-" \
-    | sed 's/^-Workspace-//')
+    | sed 's/^-Workspace-//') || true
   all_projects=$(printf "%s\n%s" "$remote_projects" "$local_projects" | sort -u)
+
+  # With CDOT_WORKSPACE_DIRS set, this machine's section leaves out projects
+  # that have no folder there anymore. Unset: cdot cannot tell, shows all.
+  local present_projects=""
+  [[ -n "$CDOT_WORKSPACE_DIRS" ]] && present_projects=$(_cdot_workspace_projects)
+  _cdot_list_here() {
+    [[ -z "$CDOT_WORKSPACE_DIRS" ]] || grep -qxF -- "$1" <<<"$present_projects"
+  }
 
   # Projects opted in on this machine
   local this_machine_projects
   this_machine_projects=$(echo "$all_branches" \
     | grep "history/[^/]*/$this_machine$" \
-    | sed "s|history/\([^/]*\)/$this_machine\$|\1|")
+    | sed "s|history/\([^/]*\)/$this_machine\$|\1|") || true
 
   # Extract unique machines, current machine first
   local machines
@@ -1439,6 +1541,7 @@ _cdot_list() {
     while IFS= read -r branch; do
       local project="${branch#history/}"
       project="${project%/$machine}"
+      [[ "$machine" == "$this_machine" ]] && ! _cdot_list_here "$project" && continue
 
       # "add — " commit message = opted in but never synced real content yet
       local last_msg
@@ -1478,6 +1581,7 @@ _cdot_list() {
       while IFS= read -r project; do
         [[ -z "$project" ]] && continue
         echo "$this_machine_projects" | grep -qx "$project" && continue
+        _cdot_list_here "$project" || continue
         # shellcheck disable=SC2059
         printf "$_FMT_NOT_IN" "$project"
       done <<< "$all_projects"
@@ -1579,19 +1683,25 @@ cdot() {
       [[ -d "$CDOT_CLAUDE_DIR/.git" ]] \
         || { echo "Sync not initialized. Run: cdot config"; return 1; }
       clear
-      _cdot_push
-      _cdot_pull_history "$name"
-      _cdot_push_history "$name"
+      _cdot_spin_start "syncing Claude config..."
+      # All sync output (git, warnings) prints above the one spinner.
+      {
+        _cdot_push
+        _cdot_spin_start "syncing history..."
+        _cdot_pull_history "$name"
+        _cdot_push_history "$name"
+      } 2>&1 | _cdot_relay
+      _cdot_spin_stop
       ;;
 
     config)   _cdot_config ;;
     read)     _cdot_read "${2:-}" "${3:-}" ;;
-    add)      _cdot_add "$name" ;;
-    remove)   _cdot_remove "${2:-$name}" ;;
+    add)      _cdot_spinning "opting in..." _cdot_add "$name" ;;
+    remove)   _cdot_spinning "removing history..." _cdot_remove "${2:-$name}" ;;
     delete)   _cdot_delete "${2:-}" ;;
-    compact)  _cdot_compact "$name" ;;
+    compact)  _cdot_spinning "compacting history..." _cdot_compact "$name" ;;
     prune)    _cdot_prune "$name" "${@:2}" ;;
-    list)     _cdot_list ;;
+    list)     _cdot_spinning "fetching remote refs..." _cdot_list ;;
     memory)   _cdot_memory "${@:2}" ;;
     doctor)   _cdot_doctor ;;
 

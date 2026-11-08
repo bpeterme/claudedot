@@ -931,3 +931,55 @@ _mem_sync() {  # machine [push|pull]
   CDOT_CLAUDE_DIR="$dir" run _cdot_complete memory wipe
   [ "$output" = "alpha" ]
 }
+
+@test "spinner: off without a terminal — output passes through unchanged" {
+  _try() {
+    _cdot_spin_start "syncing..."
+    { echo line; echo err >&2; } 2>&1 | _cdot_relay
+    _cdot_spin_stop
+    echo "spinner=[$_CDOT_SPINNER_PID]"
+  }
+  run _try
+  [ "$status" -eq 0 ]
+  [ "$output" = $'line\nerr\nspinner=[]' ]
+}
+
+@test "cdot list: without any history branch says so and succeeds (set -e)" {
+  local remote="$BATS_TMPDIR/list-empty-remote.git" dir="$BATS_TMPDIR/list-empty"
+  rm -rf "$remote" "$dir"
+  git init -q --bare "$remote"
+  _setup_history_repo "$dir"
+  git -C "$dir" remote add origin "$remote"
+  git -C "$dir" push -q -u origin HEAD 2>/dev/null
+  # As a program, so cdot runs under set -euo pipefail like the real command.
+  USER="${USER:-t}" CDOT_CLAUDE_DIR="$dir" run bash "$CDOT_SH" list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No projects opted into history sync"* ]]
+}
+
+@test "cdot list: CDOT_WORKSPACE_DIRS leaves projects without a folder out of this machine" {
+  local remote="$BATS_TMPDIR/list-ws-remote.git" dir="$BATS_TMPDIR/list-ws" ws="$BATS_TMPDIR/list-ws-projects"
+  rm -rf "$remote" "$dir" "$ws"
+  git init -q --bare "$remote"
+  _setup_history_repo "$dir"
+  git -C "$dir" remote add origin "$remote"
+  git -C "$dir" push -q -u origin HEAD 2>/dev/null
+  export USER="${USER:-t}"
+  CDOT_CLAUDE_DIR="$dir"
+  local m; m=$(_cdot_machine_id)
+  # Opted in here: Genesis (folder present) and SONA (folder deleted)
+  git -C "$dir" push -q origin "HEAD:refs/heads/history/Genesis/$m" "HEAD:refs/heads/history/SONA/$m" 2>/dev/null
+  # Memory synced from elsewhere: Network (folder present), Website (not)
+  mkdir -p "$dir/projects/-Workspace-Network/memory" "$dir/projects/-Workspace-Website/memory"
+  mkdir -p "$ws/Genesis" "$ws/Network"
+
+  CDOT_WORKSPACE_DIRS="" run _cdot_list
+  [[ "$output" == *"SONA"* && "$output" == *"Website"* ]]
+
+  CDOT_WORKSPACE_DIRS="/nonexistent:$ws" run _cdot_list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Genesis"* ]]
+  [[ "$output" == *"Network"*"not opted in"* ]]
+  [[ "$output" != *"SONA"* ]]
+  [[ "$output" != *"Website"* ]]
+}
