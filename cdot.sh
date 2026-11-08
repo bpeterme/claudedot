@@ -121,6 +121,49 @@ fi
 # helpers
 # ---------------------------------------------------------
 
+# One spinner per command: _cdot_spin_start starts it (or, if it already
+# runs, only changes its label — also from a subshell); it keeps spinning
+# until _cdot_spin_stop. Everything printed meanwhile goes through
+# _cdot_relay, which clears the spinner line in the same write, so output
+# lands at column 0 and the spinner redraws below it. The frame sits in
+# column 0, where ✔/⚠ appear. The cursor is hidden while it spins.
+_CDOT_SPINNER_PID=""
+_CDOT_SPINNER_MSG=""
+_cdot_spin_start() {
+  local msg="${1:-syncing...}"
+  if [[ -n "${_CDOT_SPINNER_PID:-}" ]]; then
+    printf '%s\n' "$msg" > "$_CDOT_SPINNER_MSG"
+    return 0
+  fi
+  [[ -t 1 ]] || return 0
+  _CDOT_SPINNER_MSG=$(mktemp)
+  printf '%s\n' "$msg" > "$_CDOT_SPINNER_MSG"
+  printf '\033[?25l'
+  trap '_cdot_spin_stop' EXIT
+  ( local f=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) i=0 m="$msg"
+    while true; do
+      IFS= read -r m < "$_CDOT_SPINNER_MSG" 2>/dev/null || true
+      printf '\r\033[K%s %s' "${f[$i]}" "$m"
+      i=$(( (i+1) % 10 ))
+      sleep 0.1
+    done ) &
+  _CDOT_SPINNER_PID=$!
+}
+_cdot_spin_stop() {
+  [[ -n "${_CDOT_SPINNER_PID:-}" ]] || return 0
+  kill "$_CDOT_SPINNER_PID" 2>/dev/null || true
+  wait "$_CDOT_SPINNER_PID" 2>/dev/null || true
+  printf '\r\033[K\033[?25h'
+  rm -f "$_CDOT_SPINNER_MSG"
+  _CDOT_SPINNER_PID=""; _CDOT_SPINNER_MSG=""
+}
+# Pipe output through this while the spinner runs: each line clears the
+# spinner line first. Without a spinner it passes lines through.
+_cdot_relay() {
+  local c='' l; [[ -n "${_CDOT_SPINNER_PID:-}" && -t 1 ]] && c=$'\r\033[K'
+  while IFS= read -r l || [[ -n "$l" ]]; do printf '%s%s\n' "$c" "$l"; done
+}
+
 _cdot_name() {
   local name
   name=$(basename "$PWD" \
@@ -1579,9 +1622,15 @@ cdot() {
       [[ -d "$CDOT_CLAUDE_DIR/.git" ]] \
         || { echo "Sync not initialized. Run: cdot config"; return 1; }
       clear
-      _cdot_push
-      _cdot_pull_history "$name"
-      _cdot_push_history "$name"
+      _cdot_spin_start "syncing Claude config..."
+      # All sync output (git, warnings) prints above the one spinner.
+      {
+        _cdot_push
+        _cdot_spin_start "syncing history..."
+        _cdot_pull_history "$name"
+        _cdot_push_history "$name"
+      } 2>&1 | _cdot_relay
+      _cdot_spin_stop
       ;;
 
     config)   _cdot_config ;;

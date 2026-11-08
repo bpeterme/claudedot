@@ -931,3 +931,15 @@ _mem_sync() {  # machine [push|pull]
   CDOT_CLAUDE_DIR="$dir" run _cdot_complete memory wipe
   [ "$output" = "alpha" ]
 }
+
+@test "spinner: off without a terminal — output passes through unchanged" {
+  _try() {
+    _cdot_spin_start "syncing..."
+    { echo line; echo err >&2; } 2>&1 | _cdot_relay
+    _cdot_spin_stop
+    echo "spinner=[$_CDOT_SPINNER_PID]"
+  }
+  run _try
+  [ "$status" -eq 0 ]
+  [ "$output" = $'line\nerr\nspinner=[]' ]
+}
