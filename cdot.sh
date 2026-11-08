@@ -163,6 +163,21 @@ _cdot_relay() {
   local c='' l; [[ -n "${_CDOT_SPINNER_PID:-}" && -t 1 ]] && c=$'\r\033[K'
   while IFS= read -r l || [[ -n "$l" ]]; do printf '%s%s\n' "$c" "$l"; done
 }
+# echo for a line printed while the spinner runs (in this shell, not a pipe)
+_cdot_say() {
+  local c=''; [[ -n "${_CDOT_SPINNER_PID:-}" && -t 1 ]] && c=$'\r\033[K'
+  printf '%s%s\n' "$c" "$*"
+}
+# Runs a command that asks nothing under the spinner; its output prints
+# above it. Keeps the command's exit status.
+_cdot_spinning() {
+  local label="$1" rc; shift
+  _cdot_spin_start "$label"
+  "$@" 2>&1 | _cdot_relay
+  rc=${PIPESTATUS[0]}
+  _cdot_spin_stop
+  return "$rc"
+}
 
 _cdot_name() {
   local name
@@ -967,11 +982,13 @@ _cdot_delete() {
   clear
 
   echo "Fetching remote refs..."
+  _cdot_spin_start "fetching remote refs..."
   git -C "$dir" fetch origin 2>/dev/null || true
 
   local branches
   branches=$(git -C "$dir" ls-remote --heads origin "history/$name/*" 2>/dev/null \
     | awk '{print $2}' | sed 's|refs/heads/||')
+  _cdot_spin_stop
 
   if [[ -z "$branches" ]]; then
     echo "No remote history found for '$name'."
@@ -984,15 +1001,17 @@ _cdot_delete() {
   read -r answer
   [[ "$answer" =~ ^[Yy]$ ]] || { echo "Aborted."; return 0; }
 
+  _cdot_spin_start "deleting history..."
   local failed=false
   while IFS= read -r branch; do
     if git -C "$dir" push origin --delete "$branch" 2>/dev/null; then
-      echo "✔ Deleted $branch"
+      _cdot_say "✔ Deleted $branch"
     else
-      echo "⚠  Could not delete $branch"
+      _cdot_say "⚠  Could not delete $branch"
       failed=true
     fi
   done <<< "$branches"
+  _cdot_spin_stop
 
   local this_branch
   this_branch=$(_cdot_history_branch "$name")
@@ -1072,6 +1091,7 @@ _cdot_prune() {
   clear
 
   echo "Fetching remote refs..."
+  _cdot_spin_start "fetching remote refs..."
   git -C "$dir" fetch origin 2>/dev/null || true
 
   local host; host=$(_cdot_machine_id)
@@ -1090,6 +1110,7 @@ _cdot_prune() {
   fi
 
   if [[ ${#branches[@]} -eq 0 ]]; then
+    _cdot_spin_stop
     $all_projects && echo "No history branches found for this machine." \
       || echo "No history branch found for project '$name'. Run: cdot add"
     return 0
@@ -1123,6 +1144,7 @@ _cdot_prune() {
 
     $should_prune && candidates+=("$branch")
   done
+  _cdot_spin_stop
 
   if [[ ${#candidates[@]} -eq 0 ]]; then
     echo "No branches match the prune criteria."
@@ -1140,13 +1162,15 @@ _cdot_prune() {
     [[ "$reply" =~ ^[Yy]$ ]] || { echo "Aborted."; return 0; }
   fi
 
+  _cdot_spin_start "deleting history..."
   for branch in "${candidates[@]}"; do
     if git -C "$dir" push origin --delete "$branch" 2>/dev/null; then
-      echo "✔ Deleted $branch"
+      _cdot_say "✔ Deleted $branch"
     else
-      echo "⚠  Failed to delete $branch"
+      _cdot_say "⚠  Failed to delete $branch"
     fi
   done
+  _cdot_spin_stop
 }
 
 # ---------------------------------------------------------
@@ -1220,6 +1244,7 @@ _cdot_read() {
   # ── Step 1: pick machine + project ─────────────────────────────────────────
   if [[ -z "$machine" || -z "$project_name" ]]; then
     echo "Fetching remote refs..."
+    _cdot_spin_start "fetching remote refs..."
     git -C "$dir" fetch origin 2>/dev/null || true
 
     # Collect all history branches excluding current machine
@@ -1241,6 +1266,7 @@ _cdot_read() {
       | grep "origin/history/" \
       | sed 's|.*origin/history/||;s/[[:space:]]//g' \
       | sort)
+    _cdot_spin_stop
 
     if [[ ${#combo_machine[@]} -eq 0 ]]; then
       [[ -n "$machine" ]] \
@@ -1273,9 +1299,11 @@ _cdot_read() {
 
   # ── Step 2: list conversations for machine + project ─────────────────────────
   local branch="history/$project_name/$machine"
+  _cdot_spin_start "fetching history..."
   git -C "$dir" fetch origin "refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || true
 
   if ! git -C "$dir" rev-parse --verify "refs/remotes/origin/$branch" >/dev/null 2>&1; then
+    _cdot_spin_stop
     echo "No history found for '$machine' / '$project_name'."
     return 1
   fi
@@ -1283,7 +1311,8 @@ _cdot_read() {
   local project_dir
   project_dir=$(_cdot_project_dir "$project_name")
 
-  echo "Loading conversation list..."
+  _cdot_say "Loading conversation list..."
+  _cdot_spin_start "loading conversations..."
   local -a raw_entries=()
   while IFS=$'\t' read -r size path <&3; do
     local head_data ts preview
@@ -1317,6 +1346,7 @@ for line in sys.stdin:
   done 3< <(git -C "$dir" ls-tree -l "refs/remotes/origin/$branch" \
     -- "projects/$project_dir/" 2>/dev/null \
     | awk '$2=="blob" && $NF ~ /\.jsonl$/ {print $4"\t"$NF}')
+  _cdot_spin_stop
 
   if [[ ${#raw_entries[@]} -eq 0 ]]; then
     echo "No conversations found for '$project_name' on '$machine'."
@@ -1635,12 +1665,12 @@ cdot() {
 
     config)   _cdot_config ;;
     read)     _cdot_read "${2:-}" "${3:-}" ;;
-    add)      _cdot_add "$name" ;;
-    remove)   _cdot_remove "${2:-$name}" ;;
+    add)      _cdot_spinning "opting in..." _cdot_add "$name" ;;
+    remove)   _cdot_spinning "removing history..." _cdot_remove "${2:-$name}" ;;
     delete)   _cdot_delete "${2:-}" ;;
-    compact)  _cdot_compact "$name" ;;
+    compact)  _cdot_spinning "compacting history..." _cdot_compact "$name" ;;
     prune)    _cdot_prune "$name" "${@:2}" ;;
-    list)     _cdot_list ;;
+    list)     _cdot_spinning "fetching remote refs..." _cdot_list ;;
     memory)   _cdot_memory "${@:2}" ;;
     doctor)   _cdot_doctor ;;
 
