@@ -58,7 +58,7 @@ _CDOT_YELLOW='\033[1;33m'; _CDOT_NC='\033[0m'
 # ---------------------------------------------------------
 
 _cdot_help() {
-    clear
+    clear 2>/dev/null || true  # no terminal (scripts, CI): nothing to clear
     cat <<'EOF'
 cdot — Claude environment sync
 
@@ -649,7 +649,7 @@ _cdot_unlink() {
 
 _cdot_config() {
   local dir="$CDOT_CLAUDE_DIR"
-  clear
+  clear 2>/dev/null || true  # no terminal (scripts, CI): nothing to clear
 
   if [[ ! -d "$dir/.git" ]] || ! git -C "$dir" remote get-url origin >/dev/null 2>&1; then
     printf "Enter remote URL: "
@@ -1002,7 +1002,7 @@ _cdot_delete() {
   local dir="$CDOT_CLAUDE_DIR"
   [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
   [[ -n "$name" ]] || { echo "Usage: cdot delete <project>"; return 1; }
-  clear
+  clear 2>/dev/null || true  # no terminal (scripts, CI): nothing to clear
 
   _cdot_step "Fetching remote refs..."
   git -C "$dir" fetch origin 2>/dev/null || true
@@ -1110,7 +1110,7 @@ _cdot_prune() {
     echo "       add --all to operate on all projects on this machine"
     return 1
   fi
-  clear
+  clear 2>/dev/null || true  # no terminal (scripts, CI): nothing to clear
 
   _cdot_step "Fetching remote refs..."
   git -C "$dir" fetch origin 2>/dev/null || true
@@ -1295,7 +1295,7 @@ _cdot_read() {
       return 0
     fi
 
-    clear
+    clear 2>/dev/null || true  # no terminal (scripts, CI): nothing to clear
     printf "Remote conversations:\n\n"
     printf "  %-3s  %-28s  %-22s  %s\n" "#" "Machine" "Project" "Last sync"
     printf "  %s\n" "$(printf '%0.s─' {1..75})"
@@ -1380,7 +1380,7 @@ for line in sys.stdin:
     [[ -n "$_line" ]] && raw_entries+=("$_line")
   done <<< "$_sorted"
 
-  clear
+  clear 2>/dev/null || true  # no terminal (scripts, CI): nothing to clear
   printf "Conversations on '%s' — '%s':\n\n" "$machine" "$project_name"
   printf "  %-3s  %-10s  %-6s  %s\n" "#" "Date" "Size" "Preview"
   printf "  %s\n" "$(printf '%0.s─' {1..80})"
@@ -1427,7 +1427,7 @@ _cdot_branch_size_mb() {
 _cdot_list() {
   local dir="$CDOT_CLAUDE_DIR"
   [[ -d "$dir/.git" ]] || { echo "Sync not initialized. Run: cdot config"; return 1; }
-  clear
+  clear 2>/dev/null || true  # no terminal (scripts, CI): nothing to clear
 
   _cdot_step "Fetching remote refs..."
   # --prune removes stale local tracking refs so _cdot_is_opted_in stays accurate
@@ -1631,7 +1631,7 @@ _cdot_doctor_inline() {
 }
 
 _cdot_doctor() {
-  clear
+  clear 2>/dev/null || true  # no terminal (scripts, CI): nothing to clear
   echo "== cdot doctor =="
   echo "Version: $_CDOT_VERSION"
 
@@ -1682,7 +1682,7 @@ cdot() {
     "")
       [[ -d "$CDOT_CLAUDE_DIR/.git" ]] \
         || { echo "Sync not initialized. Run: cdot config"; return 1; }
-      clear
+      clear 2>/dev/null || true  # no terminal (scripts, CI): nothing to clear
       _cdot_spin_start "syncing Claude config..."
       # All sync output (git, warnings) prints above the one spinner.
       {
