@@ -639,6 +639,64 @@ _oc_repo() {
   grep -qx "plugins/synced/" "$dir/.gitignore"
 }
 
+@test "_cdot_push: a repo made by an older cdot starts syncing skills, but not the claude.ai skill cache" {
+  local dir="$BATS_TMPDIR/skills-heal" remote="$BATS_TMPDIR/skills-heal-remote.git"
+  rm -rf "$dir" "$remote"
+  git init -q --bare "$remote"
+  mkdir -p "$dir/skills/team" "$dir/skills/synced/acct/pdf" "$dir/rules"
+  git -C "$dir" init -q -b main 2>/dev/null || { git -C "$dir" init -q && git -C "$dir" branch -M main; }
+  git -C "$dir" config user.email "t@t.com"
+  git -C "$dir" config user.name "T"
+  # As older cdot versions wrote it: no skills, rules, agents, output-styles.
+  printf '*\n!.gitignore\n!settings.json\n!plugins/\n!plugins/**\nplugins/synced/\n' > "$dir/.gitignore"
+  echo '{}' > "$dir/settings.json"
+  git -C "$dir" add -A && git -C "$dir" commit -q -m init
+  git -C "$dir" remote add origin "$remote"
+  git -C "$dir" push -q -u origin main
+  echo "# team" > "$dir/skills/team/SKILL.md"
+  echo "# pdf" > "$dir/skills/synced/acct/pdf/SKILL.md"
+  echo "rule" > "$dir/rules/a.md"
+  CDOT_CLAUDE_DIR="$dir" CDOT_OPENCODE_CONFIG="/dev/null/nonexistent" _cdot_push
+  [ -n "$(git -C "$dir" ls-files skills/team/SKILL.md)" ]
+  [ -n "$(git -C "$dir" ls-files rules/a.md)" ]
+  [ -z "$(git -C "$dir" ls-files skills/synced)" ]
+  [ "$(grep -cx 'plugins/synced/' "$dir/.gitignore")" -eq 1 ]
+  # A second run adds nothing more.
+  before=$(cat "$dir/.gitignore")
+  CDOT_CLAUDE_DIR="$dir" CDOT_OPENCODE_CONFIG="/dev/null/nonexistent" _cdot_push
+  [ "$(cat "$dir/.gitignore")" = "$before" ]
+}
+
+@test "_cdot_push: untracks an already-committed claude.ai skill cache and keeps it on disk" {
+  local dir="$BATS_TMPDIR/skills-untrack" remote="$BATS_TMPDIR/skills-untrack-remote.git"
+  rm -rf "$dir" "$remote"
+  git init -q --bare "$remote"
+  mkdir -p "$dir/skills/synced/acct/pdf"
+  git -C "$dir" init -q -b main 2>/dev/null || { git -C "$dir" init -q && git -C "$dir" branch -M main; }
+  git -C "$dir" config user.email "t@t.com"
+  git -C "$dir" config user.name "T"
+  printf '*\n!.gitignore\n!skills/\n!skills/**\n' > "$dir/.gitignore"
+  echo "# pdf" > "$dir/skills/synced/acct/pdf/SKILL.md"
+  git -C "$dir" add -A && git -C "$dir" commit -q -m init
+  git -C "$dir" remote add origin "$remote"
+  git -C "$dir" push -q -u origin main
+  CDOT_CLAUDE_DIR="$dir" CDOT_OPENCODE_CONFIG="/dev/null/nonexistent" _cdot_push
+  [ -z "$(git -C "$dir" ls-files skills/synced)" ]
+  [ -f "$dir/skills/synced/acct/pdf/SKILL.md" ]
+}
+
+@test "_cdot_write_gitignore: syncs own skills, not the claude.ai skill cache" {
+  local dir="$BATS_TMPDIR/skills-gi"
+  rm -rf "$dir"; mkdir -p "$dir/skills/synced/acct" "$dir/skills/team"
+  git -C "$dir" init -q
+  touch "$dir/skills/synced/acct/manifest.json" "$dir/skills/team/SKILL.md"
+  _cdot_write_gitignore "$dir"
+  run git -C "$dir" check-ignore -q skills/synced/acct/manifest.json
+  [ "$status" -eq 0 ]
+  run git -C "$dir" check-ignore -q skills/team/SKILL.md
+  [ "$status" -ne 0 ]
+}
+
 # ---------------------------------------------------------------------------
 # zsh completion (completions/_cdot)
 # ---------------------------------------------------------------------------

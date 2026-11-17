@@ -99,7 +99,7 @@ Files synced by default:
 | `keybindings.json` | Key bindings |
 | `*.sh` | User scripts (e.g. statusline scripts) |
 | `plugins/**` | Plugin configuration |
-| `skills/**` | User-defined skills |
+| `skills/**` | User-defined skills (not `skills/synced/`: Claude Code's own download of your claude.ai skills, rewritten on every machine) |
 | `rules/**` | User-defined rules |
 | `agents/**` | User-defined agents |
 | `output-styles/**` | Output style definitions |
@@ -110,6 +110,8 @@ Files synced by default:
 > `opencode.json` may contain API keys in plain text. Ensure your sync remote is a **private** repository.
 >
 > cdot installs the **committed** `opencode.json` on your machine, never the file in the sync folder: claudebox containers can write that folder, and opencode runs the commands its config names (MCP servers). On a machine without its own opencode config, a changed `opencode.json` in the sync folder is not synced; it is kept as `opencode.json.rejected`. Note that the sync folder, and so this file with its API keys, is readable inside claudebox containers.
+
+A sync repo set up by an older `cdot` gets the entries it lacks added to its `.gitignore` on the next run.
 
 Symlinks are excluded from sync automatically. If a dangling symlink arrives from another machine, `cdot` warns and removes it from the index.
 
