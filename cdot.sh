@@ -394,16 +394,8 @@ _cdot_push() {
   # Copy opencode config into the sync dir before staging (no remote required)
   _cdot_stage_opencode
 
-  # Self-heal: add !opencode.json to existing repos that pre-date this feature
-  if [[ -f "$dir/.gitignore" ]] && ! grep -qx "!opencode.json" "$dir/.gitignore"; then
-    echo "!opencode.json" >> "$dir/.gitignore"
-  fi
-
-  # Self-heal: stop syncing Claude Code's per-machine plugin cache in repos
-  # that pre-date the exclusion (it caused rebase conflicts on every sync)
-  if [[ -f "$dir/.gitignore" ]] && ! grep -qx "plugins/synced/" "$dir/.gitignore"; then
-    echo "plugins/synced/" >> "$dir/.gitignore"
-  fi
+  # Self-heal: repos that pre-date a line of the allowlist get it
+  _cdot_gitignore_heal "$dir"
 
   # Self-heal: sync project memory in repos that pre-date it
   _cdot_memory_heal
@@ -419,9 +411,12 @@ _cdot_push() {
 
   # Untrack the plugin cache if an older sync committed it (.gitignore alone
   # does not untrack files); the files stay on disk
-  if [[ -n "$(git -C "$dir" ls-files plugins/synced)" ]]; then
-    git -C "$dir" rm -r -q --cached plugins/synced
-  fi
+  local _cache
+  for _cache in plugins/synced skills/synced; do
+    if [[ -n "$(git -C "$dir" ls-files "$_cache")" ]]; then
+      git -C "$dir" rm -r -q --cached "$_cache"
+    fi
+  done
 
   git -C "$dir" add -A
   # Un-stage symlinks and embedded git repos — .gitignore allowlist overrides
@@ -450,6 +445,28 @@ _cdot_push() {
 
   echo "⚠  Sync push failed — changes saved locally."
   echo "   Retry manually: git -C \"$dir\" push"
+}
+
+# Lines every allowlist needs, in order (a later line wins in .gitignore).
+# Repos made by an older cdot lack some; _cdot_gitignore_heal appends them.
+# The caches are Claude Code's own per-machine downloads (plugins, and the
+# skills of the claude.ai account): every machine rewrites them, so syncing
+# them only produces conflicts.
+_CDOT_GITIGNORE_LINES=(
+  '!opencode.json'
+  '!plugins/' '!plugins/**' 'plugins/synced/'
+  '!skills/' '!skills/**' 'skills/synced/'
+  '!rules/' '!rules/**'
+  '!agents/' '!agents/**'
+  '!output-styles/' '!output-styles/**'
+)
+
+_cdot_gitignore_heal() {
+  local dir="$1" _line
+  [[ -f "$dir/.gitignore" ]] || return 0
+  for _line in "${_CDOT_GITIGNORE_LINES[@]}"; do
+    grep -qxF -- "$_line" "$dir/.gitignore" || printf '%s\n' "$_line" >> "$dir/.gitignore"
+  done
 }
 
 # Allowlist for main branch — config plus each project's memory folder
@@ -486,9 +503,10 @@ _cdot_write_gitignore() {
 # rewrites it independently, so syncing it only produces conflicts
 plugins/synced/
 
-# User-defined extensions
+# User-defined extensions (not the skills Claude Code downloads from claude.ai)
 !skills/
 !skills/**
+skills/synced/
 !rules/
 !rules/**
 !agents/
