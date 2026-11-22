@@ -21,6 +21,25 @@ setup() {
   [[ "$output" == "cdot "* ]]
 }
 
+# A manual install links ~/.local/bin/cdot to a clone: the version comes from
+# the clone, not from the folder of the link.
+@test "cdot via a symlink: reports the version of the real file" {
+  local bin="$BATS_TMPDIR/symlink-bin"
+  mkdir -p "$bin"
+  ln -sf "$CDOT_SH" "$bin/cdot"
+  ln -sf "cdot" "$bin/cdot-relative"
+  local show='source "$1"; echo "$_CDOT_VERSION"'
+  run bash -c "$show" _ "$CDOT_SH"
+  [ "$status" -eq 0 ]
+  local expected="$output"
+  run bash -c "$show" _ "$bin/cdot"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$expected" ]
+  run bash -c "$show" _ "$bin/cdot-relative"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$expected" ]
+}
+
 # ---------------------------------------------------------------------------
 # _cdot_project_dir
 # ---------------------------------------------------------------------------

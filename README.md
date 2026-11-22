@@ -22,9 +22,16 @@ cdot --help
 
 ```bash
 git clone https://github.com/bpeterme/claudedot.git ~/claudedot
+mkdir -p ~/.local/bin && ln -s ~/claudedot/cdot.sh ~/.local/bin/cdot
+# update later: git -C ~/claudedot pull
 ```
 
-Add to your `~/.zshrc` or `~/.bashrc`:
+The link puts `cdot` on your `PATH`, where scripts and
+[claudebox](https://github.com/bpeterme/claudebox) find it. If your shell says
+`cdot: command not found`, add `export PATH="$HOME/.local/bin:$PATH"` to your
+`~/.zshrc` or `~/.bashrc`.
+
+For tab completion, also add to your `~/.zshrc` or `~/.bashrc`:
 
 ```bash
 source ~/claudedot/cdot.sh

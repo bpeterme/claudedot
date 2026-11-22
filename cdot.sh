@@ -113,7 +113,16 @@ CDOT_WORKSPACE_DIRS="${CDOT_WORKSPACE_DIRS:-}"
 
 _CDOT_VERSION="dev"
 if [[ "$_CDOT_VERSION" == "dev" ]]; then
-  _v=$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --short HEAD 2>/dev/null) || true
+  # The git checkout of the real cdot.sh, through symlinks (~/.local/bin/cdot
+  # -> a clone). Plain readlink, for macOS' too.
+  _cdot_self="${BASH_SOURCE[0]}"
+  _n=0
+  while [[ -L "$_cdot_self" ]] && (( _n++ < 10 )); do
+    _t=$(readlink "$_cdot_self")
+    [[ "$_t" == /* ]] && _cdot_self="$_t" || _cdot_self="$(dirname "$_cdot_self")/$_t"
+  done
+  _v=$(git -C "$(dirname "$_cdot_self")" rev-parse --short HEAD 2>/dev/null) || true
+  unset _cdot_self _t _n
   [[ -n "$_v" ]] && _CDOT_VERSION="HEAD-$_v"
   unset _v
 fi
