@@ -21,9 +21,9 @@ cdot --help
 ### Manual
 
 ```bash
-git clone https://github.com/bpeterme/claudedot.git ~/claudedot
-mkdir -p ~/.local/bin && ln -s ~/claudedot/cdot.sh ~/.local/bin/cdot
-# update later: git -C ~/claudedot pull
+git clone https://github.com/bpeterme/claudedot.git ~/.local/share/claudedot-src
+mkdir -p ~/.local/bin && ln -s ~/.local/share/claudedot-src/cdot.sh ~/.local/bin/cdot
+# update later: git -C ~/.local/share/claudedot-src pull
 ```
 
 The link puts `cdot` on your `PATH`, where scripts and
@@ -34,7 +34,7 @@ The link puts `cdot` on your `PATH`, where scripts and
 For tab completion, also add to your `~/.zshrc` or `~/.bashrc`:
 
 ```bash
-source ~/claudedot/cdot.sh
+source ~/.local/share/claudedot-src/cdot.sh
 ```
 
 Then:
