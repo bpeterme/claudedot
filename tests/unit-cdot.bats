@@ -1060,3 +1060,10 @@ _mem_sync() {  # machine [push|pull]
   [[ "$output" != *"SONA"* ]]
   [[ "$output" != *"Website"* ]]
 }
+
+@test "cdot.sh is committed as executable" {
+  # The manual install links ~/.local/bin/cdot to the clone's cdot.sh: programs that
+  # look cdot up on PATH (flux, scripts) run that file, so it needs the exec bit.
+  run git -C "$BATS_TEST_DIRNAME/.." ls-files -s cdot.sh
+  [[ "$output" == 100755* ]]
+}
